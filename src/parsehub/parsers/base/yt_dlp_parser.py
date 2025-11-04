@@ -51,9 +51,9 @@ class YtParser(BaseParser):
         try:
             dl = await asyncio.wait_for(asyncio.to_thread(self._extract_info, url), timeout=30)
         except TimeoutError as e:
-            raise ParseError("解析视频信息超时") from e
+            raise ParseError("解析影片資訊逾時") from e
         except Exception as e:
-            raise ParseError(f"解析视频信息失败: {str(e)}") from e
+            raise ParseError(f"解析影片資訊失敗: {str(e)}") from e
 
         if dl.get("_type"):
             dl = dl["entries"][0]
@@ -141,10 +141,10 @@ class YtVideoParseResult(VideoParseResult):
 
         paramss["outtmpl"] = f"{dir_.joinpath('ytdlp_%(id)s')}.%(ext)s"
 
-        text = "下载合并中...请耐心等待..."
+        text = "🗜️下載合併影音畫面中..."
         if GlobalConfig.duration_limit and self.dl.duration > GlobalConfig.duration_limit:
             # 视频超过限制时长，获取最低画质
-            text += f"\n视频超过 {GlobalConfig.duration_limit} 秒，获取最低画质"
+            text += f"\n影片超過 {GlobalConfig.duration_limit} 秒，獲取最低畫質"
             paramss["format"] = "worstvideo* + worstaudio / worst"
 
         if callback:
@@ -154,7 +154,7 @@ class YtVideoParseResult(VideoParseResult):
 
         v = list(dir_.glob("*.mp4")) or list(dir_.glob("*.mkv")) or list(dir_.glob("*.webm"))
         if not v:
-            raise DownloadError("未获取到下载完成的视频")
+            raise DownloadError("找不到下載完成的影片")
         video_path = v[0]
         subtitles = (v := list(dir_.glob("*.ttml"))) and Subtitles.parse(v[0])
 
@@ -182,7 +182,7 @@ class YtVideoParseResult(VideoParseResult):
                 timeout=300,
             )
         except TimeoutError as e:
-            raise DownloadError("下载超时") from e
+            raise DownloadError("下載逾時") from e
         except RuntimeError as e:
             error = str(e)
             if any(
