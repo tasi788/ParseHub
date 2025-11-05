@@ -40,11 +40,15 @@ class WeiboParser(BaseParser):
                     ),
                 )
 
-        for i in (
+        media_info = (
             ((rs := data.retweeted_status) and rs.pic_infos)
             or data.pic_infos
             or (data.mix_media_info and data.mix_media_info.items)
-        ):
+        )
+        if not media_info:
+            return MultimediaParseResult(desc=text, raw_url=url, media=[])
+
+        for i in media_info:
             match i.type:
                 case MediaType.VIDEO:
                     media.append(
@@ -71,15 +75,14 @@ class WeiboParser(BaseParser):
     def f_text(self, text: str) -> str:
         # text = re.sub(r'<a  href="https://video.weibo.com.*?>.*的微博视频.*</a>', "", text)
         # text = re.sub(r"<[^>]+>", " ", text)
-        text = text.strip()
         text = self.hashtag_handler(text)
-        return text
+        return text.strip()
 
     @staticmethod
     def hashtag_handler(desc: str):
-        hashtags = re.findall(r"#[^#\[\]]+#", desc)
+        hashtags = re.findall(r" ?#[^#]+# ?", desc)
         for hashtag in hashtags:
-            desc = desc.replace(hashtag, hashtag.removesuffix("#"))
+            desc = desc.replace(hashtag, f" {hashtag.strip().removesuffix('#')} ")
         return desc
 
 
