@@ -12,3 +12,4 @@ from .weixin import *
 from .xhs_ import *
 from .youtube import *
 from .zuiyou import *
+from .pttcc import *
