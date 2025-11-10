@@ -43,6 +43,39 @@ class PTTCC:
                 title = value.text.strip()
             metaline.decompose()
 
+        # 先移除 -- 分隔線之後的所有內容（包含推文區的作者留言）
+        # 找到最後一個 -- 分隔線，且下一行包含 "※ 發信站"
+        separator_element = None
+        for element in content.descendants:
+            if element.string and element.string.strip() == "--":
+                # 檢查下一個兄弟元素是否包含 "※ 發信站"
+                next_sibling = element.next_sibling
+                while next_sibling:
+                    if hasattr(next_sibling, 'get_text'):
+                        sibling_text = next_sibling.get_text()
+                    elif isinstance(next_sibling, str):
+                        sibling_text = next_sibling
+                    else:
+                        sibling_text = ""
+                    
+                    if "※ 發信站" in sibling_text:
+                        separator_element = element
+                        break
+                    # 只檢查緊鄰的幾個元素
+                    if sibling_text.strip():
+                        break
+                    next_sibling = next_sibling.next_sibling
+        
+        # 移除找到的分隔線及之後的所有內容
+        if separator_element:
+            next_siblings = list(separator_element.next_siblings)
+            for sibling in next_siblings:
+                if hasattr(sibling, 'decompose'):
+                    sibling.decompose()
+            if hasattr(separator_element, 'decompose'):
+                separator_element.decompose()
+
+        # 移除推文區（如果還有殘留）
         for push in content.select("div.push"):
             push.decompose()
 
@@ -54,14 +87,6 @@ class PTTCC:
             span.decompose()
 
         imgs: list[str] = []
-        for img in content.find_all("img", src=True):
-            src = img["src"].strip()
-            if not src:
-                continue
-            absolute_src = urljoin(url, src)
-            if absolute_src not in imgs:
-                imgs.append(absolute_src)
-
         img_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
         for anchor in content.find_all("a", href=True):
             href = anchor["href"].strip()
@@ -70,6 +95,7 @@ class PTTCC:
             absolute_href = urljoin(url, href)
             lower = absolute_href.lower().split("?")[0]
             if any(lower.endswith(ext) for ext in img_exts):
+                imgs.append(absolute_href)
                 anchor.decompose()
 
         inner_html = content.decode_contents()
