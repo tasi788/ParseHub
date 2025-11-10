@@ -96,26 +96,17 @@ class PTTCC:
             lower = absolute_href.lower().split("?")[0]
             if any(lower.endswith(ext) for ext in img_exts):
                 imgs.append(absolute_href)
-                anchor.decompose()
 
         inner_html = content.decode_contents()
         markdown_content = MarkdownConverter(heading_style="ATX").convert(inner_html).strip() or None
 
         raw_text = content.get_text("\n")
-        for anchor in content.find_all("a", href=True):
-            href = anchor["href"].strip()
-            if href:
-                raw_text = raw_text.replace(href, "")
         lines = [line.rstrip() for line in raw_text.splitlines()]
         text_lines: list[str] = []
         last_blank = False
-        image_set = set(imgs)
         for line in lines:
             stripped = line.strip()
             if stripped == "--":
-                continue
-            normalized = stripped.strip("<>")
-            if normalized and normalized in image_set:
                 continue
             if not stripped:
                 if not last_blank:
