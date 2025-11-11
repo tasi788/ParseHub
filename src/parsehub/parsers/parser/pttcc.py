@@ -22,11 +22,12 @@ class PTTParser(BaseParser):
             desc=parsed.text_content or parsed.markdown_content or "",
             raw_url=url,
             pttcc=parsed,
+            proxy=self.cfg.proxy,
         )
 
 
 class PTTImageParseResult(ImageParseResult):
-    def __init__(self, title: str, photo: list[str], desc: str, raw_url: str, pttcc: "PTTCC"):
+    def __init__(self, title: str, photo: list[str], desc: str, raw_url: str, pttcc: "PTTCC", proxy: str = None):
         super().__init__(title, photo, desc, raw_url)
         self.pttcc = pttcc
     
