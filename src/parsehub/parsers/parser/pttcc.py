@@ -37,8 +37,10 @@ class PTTImageParseResult(ImageParseResult):
         path: str | Path = None,
         callback: Callable[[int, int, str | None, tuple], Awaitable[None]] = None,
         callback_args: tuple = (),
-        config: DownloadConfig = DownloadConfig(proxy=self.proxy),
+        config: DownloadConfig = DownloadConfig(),
     ) -> DownloadResult:
+        if self.proxy:
+            config.proxy = self.proxy
         headers = config.headers or {"User-Agent": GlobalConfig.ua}
         headers["Accept"] = (
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"
