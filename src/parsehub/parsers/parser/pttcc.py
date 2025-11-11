@@ -30,13 +30,14 @@ class PTTImageParseResult(ImageParseResult):
     def __init__(self, title: str, photo: list[str], desc: str, raw_url: str, pttcc: "PTTCC", proxy: str = None):
         super().__init__(title, photo, desc, raw_url)
         self.pttcc = pttcc
+        self.proxy = proxy
     
     async def download(
         self,
         path: str | Path = None,
         callback: Callable[[int, int, str | None, tuple], Awaitable[None]] = None,
         callback_args: tuple = (),
-        config: DownloadConfig = DownloadConfig(proxy=self.cfg.proxy),
+        config: DownloadConfig = DownloadConfig(proxy=self.proxy),
     ) -> DownloadResult:
         headers = config.headers or {"User-Agent": GlobalConfig.ua}
         headers["Accept"] = (
