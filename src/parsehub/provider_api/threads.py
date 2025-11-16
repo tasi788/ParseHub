@@ -37,6 +37,8 @@ class ThreadsAPI:
             response = await client.post("https://www.threads.com/ajax/route-definition", headers=headers, data=data)
             response.raise_for_status()
             jsonp = [json.loads(j.strip()) for j in response.text.strip().split("for (;;);") if j]
+            with open("threads.json", "w", encoding="utf-8") as f:
+                json.dump(jsonp, f, ensure_ascii=False, indent=4)
             return ThreadsPost.parse(jsonp)
 
     @staticmethod
@@ -95,7 +97,15 @@ class ThreadsPost:
     @staticmethod
     def _fetch_content(data: dict) -> str:
         payload = data["payload"]
-        meta = payload.get("result", {}).get("exports", {}).get("meta")
+        result = payload.get("result", {})
+        
+        # 尝试从 redirect_result 获取（用户更改名称后的情况）
+        meta = result.get("redirect_result", {}).get("exports", {}).get("meta")
+        
+        # 如果没有 redirect_result，则从正常路径获取
+        if not meta:
+            meta = result.get("exports", {}).get("meta")
+        
         if not meta:
             raise Exception("获取内容失败")
         return meta["title"]
