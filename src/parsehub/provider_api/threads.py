@@ -37,8 +37,6 @@ class ThreadsAPI:
             response = await client.post("https://www.threads.com/ajax/route-definition", headers=headers, data=data)
             response.raise_for_status()
             jsonp = [json.loads(j.strip()) for j in response.text.strip().split("for (;;);") if j]
-            with open("threads.json", "w", encoding="utf-8") as f:
-                json.dump(jsonp, f, ensure_ascii=False, indent=4)
             return ThreadsPost.parse(jsonp)
 
     @staticmethod
