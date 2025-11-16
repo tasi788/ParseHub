@@ -47,6 +47,7 @@ dependencies = [
     "pydicom>=3.0.1",
     "pillow>=11.3.0",
     "pillow-heif>=1.1.1",
+    "stealth-requests>=2.0.4",
 ]
 [tool.hatch.build.targets.wheel]
 packages = ["src/parsehub"]
