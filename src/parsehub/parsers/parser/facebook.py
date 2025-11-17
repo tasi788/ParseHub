@@ -20,7 +20,8 @@ class FacebookParse(YtParser):
         """判断是否為影片連結"""
         video_patterns = [
             r'/watch\?v=',
-            r'/share/[vr]/',
+            r'/share/r/',  # alias reels
+            r'/share/v/',  # alias video
             r'/videos/',
             r'/reel/',
         ]
@@ -35,6 +36,8 @@ class FacebookParse(YtParser):
             r'/story\.php',
             r'/photo',
             r'/groups/.+/permalink/',
+            r'/share/p/',  # alias post
+            r'/share/[^/]+$',  # alias post
         ]
         return any(re.search(pattern, parsed.path) for pattern in post_patterns)
 
