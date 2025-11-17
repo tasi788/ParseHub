@@ -62,17 +62,17 @@ class FacebookParse(YtParser):
             
             # 構建描述
             desc_parts = [post.text]
-            if post.likes != 'null' or post.comments != 'null' or post.shares != 'null':
-                reactions = []
-                if post.likes != 'null':
-                    reactions.append(f"❤️ {post.likes}")
-                if post.comments != 'null':
-                    reactions.append(f"💬 {post.comments}")
-                if post.shares != 'null':
-                    reactions.append(f"🔁 {post.shares}")
-                desc_parts.append(' • '.join(reactions))
+            # if post.likes != 'null' or post.comments != 'null' or post.shares != 'null':
+            #     reactions = []
+            #     if post.likes != 'null':
+            #         reactions.append(f"❤️ {post.likes}")
+            #     if post.comments != 'null':
+            #         reactions.append(f"💬 {post.comments}")
+            #     if post.shares != 'null':
+            #         reactions.append(f"🔁 {post.shares}")
+            #     desc_parts.append(' • '.join(reactions))
             
-            desc = '\n\n'.join(filter(None, desc_parts))
+            # desc = '\n\n'.join(filter(None, desc_parts))
             
             # 處理圖片
             photos = [Image(path=img_url) for img_url in post.image_links]
