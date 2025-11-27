@@ -21,6 +21,7 @@ class Media:
     thumb_url: str = None
     width: int = 0
     height: int = 0
+    stream: bool = False
 
     @property
     def is_url(self) -> bool:

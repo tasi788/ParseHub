@@ -5,6 +5,7 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Literal, TypeVar
+import subprocess
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -203,6 +204,60 @@ class DownloadResult[T]:
         """解析结果"""
         self.media = media
         self.save_dir = Path(save_dir).resolve() if save_dir else None
+        self.__reparse(media)
+    
+    def __reparse(self, media: list[MediaT] | MediaT):
+        """重新解析视频"""
+        if isinstance(media, list):
+            for m in media:
+                if isinstance(m, Video):
+                    self.__reparse(m)
+        elif isinstance(media, Video):
+            # 获取视频宽高
+            result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "csv=p=0",
+                media.path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        out = result.stdout.strip()
+        
+        try:
+            video.width, video.height = tuple(map(int, out.split(",")))
+        except ValueError:
+            pass
+        
+        # 获取视频编码格式
+        codec_result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                media.path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        codec_out = codec_result.stdout.strip()
+        
+        # 检查编码是否为 h264, h265 或 hevc
+        codec = codec_out.lower().strip()
+        if codec in ("h264", "h265", "hevc"):
+            video.stream = True
 
     def exists(self) -> bool:
         """是否存在本地文件"""
