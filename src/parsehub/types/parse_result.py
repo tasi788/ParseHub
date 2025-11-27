@@ -215,49 +215,49 @@ class DownloadResult[T]:
         elif isinstance(media, Video):
             # 获取视频宽高
             result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-show_entries",
-                "stream=width,height",
-                "-of",
-                "csv=p=0",
-                media.path,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        out = result.stdout.strip()
-        
-        try:
-            media.width, media.height = tuple(map(int, out.split(",")))
-        except ValueError:
-            pass
-        
-        # 获取视频编码格式
-        codec_result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=codec_name",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                media.path,
-            ],
-            capture_output=True,
-            text=True,
-        )
-        codec_out = codec_result.stdout.strip()
-        
-        # 检查编码是否为 h264, h265 或 hevc
-        codec = codec_out.lower().strip()
-        if codec in ("h264", "h265", "hevc"):
-            media.stream = True
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "stream=width,height",
+                    "-of",
+                    "csv=p=0",
+                    media.path,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            out = result.stdout.strip()
+            
+            try:
+                media.width, media.height = tuple(map(int, out.split(",")))
+            except ValueError:
+                pass
+            
+            # 获取视频编码格式
+            codec_result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-show_entries",
+                    "stream=codec_name",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    media.path,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            codec_out = codec_result.stdout.strip()
+            
+            # 检查编码是否为 h264, h265 或 hevc
+            codec = codec_out.lower().strip()
+            if codec in ("h264", "h265", "hevc"):
+                media.stream = True
 
     def exists(self) -> bool:
         """是否存在本地文件"""
