@@ -231,7 +231,7 @@ class DownloadResult[T]:
         out = result.stdout.strip()
         
         try:
-            video.width, video.height = tuple(map(int, out.split(",")))
+            media.width, media.height = tuple(map(int, out.split(",")))
         except ValueError:
             pass
         
@@ -257,7 +257,7 @@ class DownloadResult[T]:
         # 检查编码是否为 h264, h265 或 hevc
         codec = codec_out.lower().strip()
         if codec in ("h264", "h265", "hevc"):
-            video.stream = True
+            media.stream = True
 
     def exists(self) -> bool:
         """是否存在本地文件"""
