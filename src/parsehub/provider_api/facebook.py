@@ -131,8 +131,12 @@ class FacebookAPI:
             data_blob = Jq.first(post_json, 'data')
             if 'comet_ufi_summary_and_actions_renderer' in data_blob:
                 return data_blob
-            else:
+            elif 'node' in data_blob:
                 return data_blob['node']['comet_sections']
+            elif 'node_v2' in data_blob:
+                return data_blob['node_v2']['comet_sections']
+            else:
+                return data_blob['node']['comet_sections'] # Fallback to raise error or similar
 
         def work_group_post() -> dict:
             hoisted_feed = Jq.first(post_json, 'group_hoisted_feed')
@@ -150,7 +154,7 @@ class FacebookAPI:
                     continue
             except (StopIteration, KeyError):
                 continue
-
+        
         raise FacebookException('Cannot process post')
     
     @staticmethod
