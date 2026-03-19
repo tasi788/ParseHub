@@ -154,6 +154,19 @@ class ThreadsPost:
         return target_post, quote_post
 
     @staticmethod
+    def _fetch_content(data: dict) -> str:
+        """從 first_response 的 payload 中提取原始標題文字（fallback 路徑）"""
+        payload = data.get("payload", {})
+        result = payload.get("result", {})
+        
+        # 先嘗試 redirect_result（用戶改名後的情況）
+        meta = result.get("redirect_result", {}).get("exports", {}).get("meta")
+        if not meta:
+            meta = result.get("exports", {}).get("meta")
+        
+        return (meta or {}).get("title", "")
+
+    @staticmethod
     def _fetch_media(data: dict):
         # 兼容舊版 preloader wrapper
         if "result" in data:
