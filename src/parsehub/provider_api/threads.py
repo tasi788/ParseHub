@@ -87,13 +87,13 @@ class ThreadsPost:
         target_post, quote_post = cls._extract_target_and_quote(jsonp, target_id)
         
         if target_post:
-            content = target_post.get("caption", {}).get("text", "")
+            content = (target_post.get("caption") or {}).get("text", "")
             media = cls._fetch_media(target_post)
             
             # 若為引用的貼文，則將其文字加到主文前面
             if quote_post:
                 quote_author = quote_post.get("user", {}).get("username", "user")
-                quote_text = quote_post.get("caption", {}).get("text", "")
+                quote_text = (quote_post.get("caption") or {}).get("text", "")
                 
                 # 若父文章有媒體，在文字開頭加上 [圖片]
                 if cls._fetch_media(quote_post):
