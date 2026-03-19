@@ -22,9 +22,10 @@ class ThreadsAPI:
             "user-agent": GlobalConfig.ua,
             "x-fb-lsd": lsd,
         }
-
+        
+        target_id = self.get_post_id_by_url(url)
         data = {
-            "route_url": f"/{self.get_username_by_url(url)}/post/{self.get_post_id_by_url(url)}/media",
+            "route_url": f"/{self.get_username_by_url(url)}/post/{target_id}",
             "routing_namespace": "barcelona_web",
             "__user": "0",
             "__a": "1",
@@ -37,11 +38,11 @@ class ThreadsAPI:
             response = await client.post("https://www.threads.com/ajax/route-definition", headers=headers, data=data)
             response.raise_for_status()
             jsonp = [json.loads(j.strip()) for j in response.text.strip().split("for (;;);") if j]
-            return ThreadsPost.parse(jsonp)
+            return ThreadsPost.parse(jsonp, target_id)
 
     @staticmethod
     def get_username_by_url(url: str) -> str:
-        u = re.search(r"/(@[\w.]+)/post/", url)
+        u = re.search(r"/(?:@)?([\w.]+)/post/", url)
         if not u:
             raise ValueError("从 URL 中获取用户名失败")
         return u[1]
@@ -78,39 +79,86 @@ class ThreadsPost:
     media: ThreadsMedia | list[ThreadsMedia] = None
 
     @classmethod
-    def parse(cls, jsonp: list[dict]):
+    def parse(cls, jsonp: list[dict], target_id: str):
         content = ""
         media = []
-        for j in jsonp:
-            match j["__type"]:
-                case "first_response":
-                    content = cls._fetch_content(j)
-                case "preloader":
-                    if "BarcelonaLightboxDialogRootQueryRelayPreloader" in j.get("id"):
-                        media = cls._fetch_media(j)
-                case "last_response":
-                    ...
-        return cls(content=content, media=media)
+        
+        # 尋找目標貼文與其父貼文 (Reply) 或 Quote
+        target_post, quote_post = cls._extract_target_and_quote(jsonp, target_id)
+        
+        if target_post:
+            content = target_post.get("caption", {}).get("text", "")
+            media = cls._fetch_media(target_post)
+            
+            # 若為引用的貼文，則將其文字加到主文前面
+            if quote_post:
+                quote_author = quote_post.get("user", {}).get("username", "user")
+                quote_text = quote_post.get("caption", {}).get("text", "")
+                
+                # 若父文章有媒體，在文字開頭加上 [圖片]
+                if cls._fetch_media(quote_post):
+                    quote_text = f"[圖片] {quote_text}" if quote_text else "[圖片]"
+                    
+                if quote_text:
+                    if len(quote_text) > 600:
+                        quote_text = quote_text[:600] + "......"
+                    content = f"<blockquote expandable>@{quote_author}:\n{quote_text}</blockquote>\n\n{content}"
+        else:
+            # Fallback 到舊版解析邏輯，避免某些結構無法解析
+            for j in jsonp:
+                match j.get("__type"):
+                    case "first_response":
+                        content = cls._fetch_content(j)
+                    case "preloader":
+                        if "BarcelonaLightboxDialogRootQueryRelayPreloader" in j.get("id", ""):
+                            media = cls._fetch_media(j)
 
-    @staticmethod
-    def _fetch_content(data: dict) -> str:
-        payload = data["payload"]
-        result = payload.get("result", {})
+        return cls(content=content, media=media)
         
-        # 尝试从 redirect_result 获取（用户更改名称后的情况）
-        meta = result.get("redirect_result", {}).get("exports", {}).get("meta")
+    @classmethod
+    def _extract_target_and_quote(cls, jsonp: list[dict], target_id: str):
+        target_post = None
+        quote_post = None
         
-        # 如果没有 redirect_result，则从正常路径获取
-        if not meta:
-            meta = result.get("exports", {}).get("meta")
-        
-        if not meta:
-            raise Exception("获取内容失败")
-        return meta["title"]
+        def find_thread_items(d):
+            results = []
+            if isinstance(d, dict):
+                if "thread_items" in d and isinstance(d["thread_items"], list):
+                    results.append(d["thread_items"])
+                for k, v in d.items():
+                    results.extend(find_thread_items(v))
+            elif isinstance(d, list):
+                for item in d:
+                    results.extend(find_thread_items(item))
+            return results
+
+        all_items = find_thread_items(jsonp)
+        for items in all_items:
+            for i, item in enumerate(items):
+                post = item.get("post", {})
+                if post.get("code") == target_id:
+                    target_post = post
+                    # 如果是回覆，上一篇就是引用的文章
+                    if i > 0:
+                        quote_post = items[i-1].get("post", {})
+                    break
+            if target_post:
+                break
+                
+        # 檢查是否為顯式引用 (Quote feature)
+        if target_post and not quote_post:
+            explicit_quote = target_post.get("text_post_app_info", {}).get("share_info", {}).get("quoted_post")
+            if explicit_quote:
+                quote_post = explicit_quote
+                
+        return target_post, quote_post
 
     @staticmethod
     def _fetch_media(data: dict):
-        data = data.get("result", {}).get("result", {}).get("data", {}).get("data")
+        # 兼容舊版 preloader wrapper
+        if "result" in data:
+            data = data.get("result", {}).get("result", {}).get("data", {}).get("data")
+            
         if not data:
             return []
 
