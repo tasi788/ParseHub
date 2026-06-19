@@ -1,180 +1,260 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Union
+from pathlib import Path
+from typing import Self, Union
 
-import httpx
-
-from ...config import GlobalConfig
+from ... import ProgressCallback
+from ...provider_api.douyin import DouyinWebCrawler
 from ...types import (
-    Image,
+    DownloadResult,
     ImageParseResult,
+    ImageRef,
+    LivePhotoRef,
     MultimediaParseResult,
     ParseError,
-    Video,
+    ParseResult,
+    Platform,
     VideoParseResult,
+    VideoRef,
 )
 from ..base.base import BaseParser
 
 
 class DouyinParser(BaseParser):
-    __platform_id__ = "douyin"
-    __platform__ = "抖音|TikTok"
+    __platform__ = Platform.DOUYIN
     __supported_type__ = ["视频", "图文"]
-    __match__ = r"^(http(s)?://)?.+douyin.com/.+|^(http(s)?://)?.+tiktok.com/.+"
-    __redirect_keywords__ = ["v.douyin", "vt.tiktok"]
+    __match__ = r"^(http(s)?://)?.+douyin.com/(?!share/user|qishui).+"
+    __redirect_keywords__ = ["v.douyin", "iesdouyin"]
     __reserved_parameters__ = ["modal_id"]
 
-    async def parse(self, url: str) -> Union["VideoParseResult", "ImageParseResult", "MultimediaParseResult"]:
-        url = await self.get_raw_url(url)
-        data = await self.parse_api(url)
+    async def _do_parse(self, raw_url: str) -> Union["VideoParseResult", "ImageParseResult", "MultimediaParseResult"]:
+        result = await self._fetch_api_result(raw_url)
 
-        match data.type:
-            case DYType.VIDEO:
-                return await self.video_parse(url, data)
-            case DYType.IMAGE:
-                return await self.image_parse(url, data)
-            case DYType.Multimedia:
-                return await self.multimedia_parse(url, data)
+        match result.type:
+            case DouyinMediaType.VIDEO:
+                return self._build_video_result(result)
+            case DouyinMediaType.IMAGE:
+                return self._build_image_result(result)
 
-    @staticmethod
-    async def parse_api(url) -> "DYResult":
-        if not GlobalConfig.douyin_api:
-            raise ParseError("抖音解析API未配置")
+    async def _fetch_api_result(self, url: str) -> "DouyinApiResult":
+        """获取并解析抖音 API 结果"""
+        if not self.cookie:
+            raise ParseError("抖音 Cookie 未配置")
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            params = {"url": url, "minimal": False}
-            try:
-                response = await client.get(f"{GlobalConfig.douyin_api}/api/hybrid/video_data", params=params)
-            except httpx.ReadTimeout as e:
-                raise ParseError("抖音解析超时") from e
-        if response.status_code != 200:
-            raise ParseError("抖音解析失败")
-        return DYResult.parse(url, response.json())
+        crawler = DouyinWebCrawler(proxy=self.proxy, cookie=self.cookie)
+        response = await crawler.parse(url)
+        return DouyinApiResult.parse(response)
 
     @staticmethod
-    async def video_parse(url, result: "DYResult"):
-        return VideoParseResult(
-            raw_url=url,
+    def _build_video_result(result: "DouyinApiResult") -> VideoParseResult:
+        """构建视频解析结果"""
+        if result.video is None:
+            raise ParseError("抖音解析失败: 未获取到视频")
+        return DouyinVideoParseResult(
             title=result.desc,
             video=result.video,
         )
 
     @staticmethod
-    async def image_parse(url, result: "DYResult"):
-        return ImageParseResult(
-            raw_url=url,
+    def _build_image_result(result: "DouyinApiResult") -> ImageParseResult:
+        """构建图片解析结果"""
+        return DouyinImageParseResult(
             title=result.desc,
             photo=result.image_list,
         )
 
-    @staticmethod
-    async def multimedia_parse(url, result: "DYResult"):
-        return MultimediaParseResult(
-            raw_url=url,
-            title=result.desc,
-            media=result.multimedia,
+
+class DouyinParseResult(ParseResult):
+    async def _do_download(
+        self,
+        *,
+        output_dir: str | Path,
+        callback: ProgressCallback | None = None,
+        callback_args: tuple = (),
+        callback_kwargs: dict | None = None,
+        proxy: str | None = None,
+        headers: dict | None = None,
+    ) -> "DownloadResult":
+        headers = {
+            "Referer": "https://www.douyin.com/",
+        }
+        return await super()._do_download(
+            output_dir=output_dir,
+            callback=callback,
+            callback_args=callback_args,
+            callback_kwargs=callback_kwargs,
+            proxy=proxy,
+            headers=headers,
         )
 
 
-class DYType(Enum):
+class DouyinVideoParseResult(DouyinParseResult, VideoParseResult): ...
+
+
+class DouyinImageParseResult(DouyinParseResult, ImageParseResult): ...
+
+
+def remove_video_watermark(url: str) -> str:
+    """移除抖音视频水印标识 (playwm -> play)"""
+    return url.replace("playwm", "play")
+
+
+def parse_video_info(video_data: dict) -> dict:
+    bit_rates = video_data.get("bit_rate")
+    if not bit_rates:
+        raise ParseError("抖音解析失败: 未获取到视频下载地址")
+
+    # 按分辨率降序排列，选择最高质量
+    bit_rates.sort(
+        key=lambda x: x.get("play_addr", {}).get("width", 0) * x.get("play_addr", {}).get("height", 0),
+        reverse=True,
+    )
+    best_quality = bit_rates[0]
+
+    play_addr = best_quality.get("play_addr", {})
+    video_url_list = play_addr.get("url_list", [])
+    if not video_url_list:
+        raise ParseError("抖音解析失败: 视频下载地址为空")
+
+    video_url = remove_video_watermark(video_url_list[0])
+
+    cover = video_data.get("cover", {})
+    thumb_url_list = cover.get("url_list", [])
+    thumb_url = thumb_url_list[-1] if thumb_url_list else None
+
+    return {
+        "video_url": video_url,
+        "thumb_url": thumb_url,
+        "duration": best_quality.get("duration", 0),
+        "width": play_addr.get("width", 0),
+        "height": play_addr.get("height", 0),
+    }
+
+
+class DouyinMediaType(Enum):
+    """抖音媒体类型"""
+
     VIDEO = "video"
-    IMAGE = "image"
-    Multimedia = "multimedia"
+    IMAGE = "image"  # 实况图片 + 图片
 
 
 @dataclass
-class DYResult:
-    type: DYType
-    platform: str
-    video: Video = None
+class DouyinApiResult:
+    """抖音 API 解析结果"""
+
+    type: DouyinMediaType
+    video: VideoRef | None = None
     desc: str = ""
-    image_list: list[Image] = None
-    multimedia: list[Video | Image] = None
+    image_list: list[ImageRef | LivePhotoRef] = field(default_factory=list)
 
-    @staticmethod
-    def parse(url: str, json_dict: dict):
-        platform = "douyin" if "douyin" in url else "tiktok"
-        data = json_dict.get("data")
-        desc = data.get("desc")
+    @classmethod
+    def parse(cls, json_dict: dict) -> Self:
+        data = json_dict.get("aweme_detail")
+        if not data:
+            raise ParseError("抖音解析失败: 未获取到作品详情")
 
-        def v_p(video_data: dict):
-            """视频信息解析"""
-            bit_rate = video_data.get("bit_rate")
-            if not bit_rate:
-                raise ParseError("抖音解析失败: 未获取到视频下载地址")
-            bit_rate.sort(key=lambda x: x["quality_type"])
-            bit_rate = bit_rate[0]
-
-            video_url = bit_rate["play_addr"]["url_list"][0]
-            thumb_url_list = video_data["cover"]["url_list"]
-            thumb_url = thumb_url_list[-1] if thumb_url_list else None
-
-            width = bit_rate["play_addr"]["width"]
-            height = bit_rate["play_addr"]["height"]
-            duration = bit_rate.get("duration", 0)
-            return {
-                "video_url": video_url,
-                "thumb_url": thumb_url,
-                "duration": duration,
-                "width": width,
-                "height": height,
-            }
+        desc = data.get("desc", "")
 
         if images := data.get("images"):
-            if images[0].get("video"):
-                multimedia = []
-                for image in images:
-                    if video := image.get("video"):
-                        vpi = v_p(video)
-                        multimedia.append(
-                            Video(
-                                vpi["video_url"],
-                                thumb_url=vpi["thumb_url"],
-                                width=vpi["width"],
-                                height=vpi["height"],
-                                duration=vpi["duration"],
+            return cls._parse_images(images, desc)
+        elif image_post_info := data.get("image_post_info"):
+            return cls._parse_image_post_info(image_post_info, desc)
+        else:
+            return cls._parse_video(data, desc)
+
+    @classmethod
+    def _parse_images(cls, images: list[dict], desc: str) -> Self:
+        """解析旧版图片格式 (images 字段)
+
+        支持普通图片和实况照片 (LivePhoto)
+        """
+        has_live_photos = any(img.get("video") for img in images)
+
+        if has_live_photos:
+            image_list: list[ImageRef | LivePhotoRef] = []
+            for image in images:
+                if video := image.get("video"):
+                    video_info = parse_video_info(video)
+                    image_list.append(
+                        LivePhotoRef(
+                            url=video_info["thumb_url"],
+                            video_url=video_info["video_url"],
+                            width=int(video_info["width"]),
+                            height=int(video_info["height"]),
+                            duration=int(video_info["duration"]) or 3,
+                        )
+                    )
+                else:
+                    url_list = image.get("url_list", [])
+                    if url_list:
+                        image_list.append(
+                            ImageRef(
+                                url=url_list[-1],
+                                height=image.get("height", 0),
+                                width=image.get("width", 0),
                             )
                         )
-                    else:
-                        multimedia.append(Image(image["url_list"][-1]))
-
-                return DYResult(
-                    type=DYType.Multimedia,
-                    desc=desc,
-                    multimedia=multimedia,
-                    platform=platform,
-                )
-            else:
-                image_list = [Image(image["url_list"][-1]) for image in images]
-                return DYResult(
-                    type=DYType.IMAGE,
-                    image_list=image_list,
-                    desc=desc,
-                    platform=platform,
-                )
-        elif image_post_info := data.get("image_post_info"):
-            images = image_post_info.get("images")
-            image_list = [Image(image["display_image"]["url_list"][-1]) for image in images]
-            return DYResult(
-                type=DYType.IMAGE,
-                image_list=image_list,
-                desc=desc,
-                platform=platform,
-            )
         else:
-            vpi = v_p(data.get("video"))
-            return DYResult(
-                type=DYType.VIDEO,
-                video=Video(
-                    vpi["video_url"],
-                    thumb_url=vpi["thumb_url"],
-                    width=vpi["width"],
-                    height=vpi["height"],
-                    duration=vpi["duration"],
-                ),
-                desc=desc,
-                platform=platform,
-            )
+            image_list = [
+                ImageRef(
+                    url=img["url_list"][-1],
+                    height=img.get("height", 0),
+                    width=img.get("width", 0),
+                )
+                for img in images
+                if img.get("url_list")
+            ]
+
+        return cls(
+            type=DouyinMediaType.IMAGE,
+            desc=desc,
+            image_list=image_list,
+        )
+
+    @classmethod
+    def _parse_image_post_info(cls, image_post_info: dict, desc: str) -> Self:
+        """解析新版图片格式 (image_post_info 字段)"""
+        images = image_post_info.get("images", [])
+        image_list: list[ImageRef | LivePhotoRef] = []
+
+        for image in images:
+            display_image = image.get("display_image", {})
+            url_list = display_image.get("url_list", [])
+            if url_list:
+                image_list.append(
+                    ImageRef(
+                        url=url_list[-1],
+                        height=display_image.get("height", 0),
+                        width=display_image.get("width", 0),
+                    )
+                )
+
+        return cls(
+            type=DouyinMediaType.IMAGE,
+            image_list=image_list,
+            desc=desc,
+        )
+
+    @classmethod
+    def _parse_video(cls, data: dict, desc: str) -> Self:
+        """解析视频"""
+        video_data = data.get("video")
+        if not video_data:
+            raise ParseError("抖音解析失败: 未获取到视频数据")
+
+        video_info = parse_video_info(video_data)
+
+        return cls(
+            type=DouyinMediaType.VIDEO,
+            video=VideoRef(
+                url=video_info["video_url"],
+                thumb_url=video_info["thumb_url"],
+                width=video_info["width"],
+                height=video_info["height"],
+                duration=video_info["duration"],
+            ),
+            desc=desc,
+        )
 
 
 __all__ = ["DouyinParser"]

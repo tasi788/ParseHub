@@ -1,28 +1,44 @@
-from ..base.yt_dlp_parser import YtImageParseResult, YtParser, YtVideoParseResult
+import io
+from typing import Any
+
+from ...types.platform import Platform
+from ..base.ytdlp import YtParser
 
 
 class YtbParse(YtParser):
-    __platform_id__ = "youtube"
-    __platform__ = "Youtube"
+    __platform__ = Platform.YOUTUBE
     __supported_type__ = ["视频", "音乐"]
     __match__ = r"^(http(s)?://).*youtu(be|.be)?(\.com)?/(?!(live|post))(?!@).+"
     __redirect_keywords__ = ["m.youtube.com"]
     __reserved_parameters__ = ["v", "list", "index"]
 
-    async def parse(self, url: str) -> YtVideoParseResult | YtImageParseResult:
-        url = await self.get_raw_url(url)
-        return await super().parse(url)
-
     @property
-    def params(self):
-        sub = {
-            "writesubtitles": True,  # 下载字幕
-            "writeautomaticsub": True,  # 下载自动生成的字幕
-            "subtitlesformat": "ttml",  # 字幕格式
-            # "subtitleslangs": ["en", "ja", "zh-CN"],  # 字幕语言
+    def params(self) -> dict[str, Any]:
+        sub: dict[str, Any] = {
+            # "writesubtitles": True, # 下载字幕
+            # "writeautomaticsub": True, # 下载自动生成的字幕
+            # "subtitlesformat": "ttml", # 字幕格式
+            # "subtitleslangs": ["en", "ja", "zh-CN"], # 字幕语言
         }
+        if self.cookie:
+            sub["cookiefile"] = io.StringIO(self.to_netscape_cookie(self.cookie, "youtube.com"))
         p = sub | super().params
         return p
+
+    @staticmethod
+    def to_netscape_cookie(cookie: dict, domain: str) -> str | None:
+        """将字典格式 cookie 转为 Netscape 格式字符串
+        :param cookie: 字典格式 cookie
+        :param domain: cookie 所属域名, 例如 "youtube.com"
+        """
+        if not cookie:
+            return None
+        if not domain.startswith("."):
+            domain = f".{domain}"
+        lines = ["# Netscape HTTP Cookie File"]
+        for name, value in cookie.items():
+            lines.append(f"{domain}\tTRUE\t/\tFALSE\t0\t{name}\t{value}")
+        return "\n".join(lines) + "\n"
 
 
 __all__ = ["YtbParse"]

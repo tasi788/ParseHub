@@ -1,27 +1,25 @@
-from ...provider_api.threads import ThreadsAPI, ThreadsMediaType
-from ...types import Image, MultimediaParseResult, Video
+from ...provider_api.threads import ThreadsAPI, ThreadsMedia, ThreadsMediaType
+from ...types import AnyMediaRef, ImageRef, MultimediaParseResult, Platform, VideoRef
 from ..base.base import BaseParser
 
 
 class ThreadsParser(BaseParser):
-    __platform_id__ = "threads"
-    __platform__ = "Threads"
+    __platform__ = Platform.THREADS
     __supported_type__ = ["视频", "图文"]
-    __match__ = r"^(http(s)?://)?.+threads.com/@[\w.]+/post/.*"
+    __match__ = r"^(http(s)?://)?.+threads.com/(?:@)?[\w.]+/post/.*"
 
-    async def parse(self, url: str) -> "MultimediaParseResult":
-        url = await self.get_raw_url(url)
-        post = await ThreadsAPI(proxy=self.cfg.proxy).parse(url)
-        media = []
+    async def _do_parse(self, raw_url: str) -> "MultimediaParseResult":
+        post = await ThreadsAPI(proxy=self.proxy).parse(raw_url)
+        media: list[AnyMediaRef] = []
         if post.media:
-            pm = post.media if isinstance(post.media, list) else [post.media]
+            pm: list[ThreadsMedia] = post.media if isinstance(post.media, list) else [post.media]
             for m in pm:
                 match m.type:
                     case ThreadsMediaType.VIDEO:
-                        media.append(Video(path=m.url, thumb_url=m.thumb_url, width=m.width, height=m.height))
+                        media.append(VideoRef(url=m.url, thumb_url=m.thumb_url, width=m.width, height=m.height))
                     case ThreadsMediaType.IMAGE:
-                        media.append(Image(path=m.url, thumb_url=m.url, width=m.width, height=m.height))
-        return MultimediaParseResult(desc=post.content, media=media, raw_url=url)
+                        media.append(ImageRef(url=m.url, thumb_url=m.url, width=m.width, height=m.height))
+        return MultimediaParseResult(content=post.content, media=media)
 
 
 __all__ = ["ThreadsParser"]

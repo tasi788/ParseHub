@@ -1,9 +1,12 @@
 import abc
 import asyncio
+import re
 from abc import abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from inspect import signature
+from typing import Any, Self, Union
+from urllib.parse import urlparse
 
 import httpx
 
@@ -11,27 +14,83 @@ import httpx
 class WeiboAPI:
     def __init__(self, proxy: str | None = None):
         self.proxy = proxy
+        self._cookies = {
+            "SUB": "_2AkMR47Mlf8NxqwFRmfocxG_lbox2wg7EieKnv0L-JRMxHRl-yT9yqhFdtRB6OmOdyoia9pKPkqoHRRmSBA_WNPaHuybH",
+        }
 
     @staticmethod
-    def get_id_by_url(url: str) -> str | None:
-        bid = url.split("/")[-1]
-        if bid.isdigit() or len(bid) == 9:
-            return bid
+    def is_tv(url: str) -> bool:
+        if "/tv/show" in url:
+            return True
+        return False
+
+    async def resolve_url(self, url: str) -> str:
+        parsed = urlparse(url)
+
+        async def fn() -> str:
+            async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=False, timeout=30) as client:
+                response = await client.get(url)
+                if response.is_error:
+                    response.raise_for_status()
+            return response.headers.get("location") or url
+
+        if parsed.hostname == "mapp.api.weibo.cn" and parsed.path.startswith("/fx/"):
+            return await fn()
+        if parsed.hostname == "video.weibo.com" and parsed.path.startswith("/show"):
+            return await fn()
+        return url
+
+    async def get_id_by_url(self, url: str) -> str | None:
+        parsed = urlparse(url)
+        if match := re.compile(r"^/status/([^/?#]+)").match(parsed.path):
+            return match[1]
+
+        id_ = parsed.path.split("/")[-1]
+
+        if self.is_tv(url) and len(id_) == 21:
+            return id_
+
+        if id_.isdigit() or len(id_) == 9:
+            return id_
         return None
 
-    async def parse(self, url: str) -> "WeiboContent":
-        bid = self.get_id_by_url(url)
+    async def statuses_show(self, bid: str) -> dict:
         headers = {
             "referer": "https://weibo.com",
         }
-        cookies = {
-            "SUB": "_2AkMR47Mlf8NxqwFRmfocxG_lbox2wg7EieKnv0L-JRMxHRl-yT9yqhFdtRB6OmOdyoia9pKPkqoHRRmSBA_WNPaHuybH",
-        }
         api = f"https://weibo.com/ajax/statuses/show?id={bid}&isGetLongText=true"
         async with httpx.AsyncClient(proxy=self.proxy) as client:
-            response = await client.get(api, cookies=cookies, headers=headers)
+            response = await client.get(api, cookies=self._cookies, headers=headers)
             response.raise_for_status()
-            result = response.json()
+            result: dict = response.json()
+            return result
+
+    async def tv_show(self, oid: str) -> dict:
+        headers = {
+            "content-type": "application/x-www-form-urlencoded",
+            "referer": "https://weibo.com/tv/home",
+        }
+        params = {
+            "page": f"/tv/show/{oid}",
+        }
+        data = {"data": f'{{"Component_Play_Playinfo":{{"oid":"{oid}"}}}}'}
+        async with httpx.AsyncClient(proxy=self.proxy) as client:
+            response = await client.post(
+                "https://weibo.com/tv/api/component", cookies=self._cookies, headers=headers, data=data, params=params
+            )
+            response.raise_for_status()
+            result: dict = response.json()
+            return result
+
+    async def parse(self, url: str) -> Union["WeiboContent", "WeiboTVContent"]:
+        resolve_url = await self.resolve_url(url)
+        id_ = await self.get_id_by_url(resolve_url)
+        if not id_:
+            raise ValueError("Invalid URL")
+        if self.is_tv(resolve_url):
+            result = await self.tv_show(id_)
+            return WeiboTVContent.parse(result)
+        result = await self.statuses_show(id_)
         return WeiboContent.parse(result)
 
 
@@ -45,12 +104,12 @@ class MediaType(Enum):
 class Info(abc.ABC):
     @property
     @abstractmethod
-    def media_url(self):
+    def media_url(self) -> str | None:
         raise NotImplementedError()
 
     @property
     @abstractmethod
-    def thumb_url(self):
+    def thumb_url(self) -> str | None:
         raise NotImplementedError()
 
 
@@ -77,12 +136,12 @@ class Playback:
 
 @dataclass
 class MediaInfo:
-    format: str = None
-    mp4_hd_url: str = None
-    mp4_sd_url: str = None
+    format: str | None = None
+    mp4_hd_url: str | None = None
+    mp4_sd_url: str | None = None
     duration: int = 0
-    prefetch_size: int = None
-    playback: Playback = None
+    prefetch_size: int | None = None
+    playback: Playback | None = None
 
     @staticmethod
     def parse(media_dict: dict) -> "MediaInfo":
@@ -91,16 +150,17 @@ class MediaInfo:
         mp4_sd_url = media_dict.get("mp4_sd_url")
         duration = media_dict["duration"]
         prefetch_size = media_dict["prefetch_size"]
-        playback = Playback.parse(p[0]) if (p := media_dict.get("playback_list", [])) else []
+        playback_list = media_dict.get("playback_list", [])
+        playback = Playback.parse(playback_list[0]) if playback_list else None
         return MediaInfo(format_, mp4_hd_url, mp4_sd_url, duration, prefetch_size, playback)
 
 
 @dataclass
 class PageInfo(Info):
-    object_type: MediaType = None
-    media_info: MediaInfo = None
-    page_pic: str = None
-    short_url: str = None
+    object_type: MediaType | None = None
+    media_info: MediaInfo | None = None
+    page_pic: str | None = None
+    short_url: str | None = None
 
     @staticmethod
     def parse(page_info_dict: dict) -> "PageInfo":
@@ -111,38 +171,40 @@ class PageInfo(Info):
         return PageInfo(object_type, media_info, page_pic, short_url)
 
     @property
-    def media_url(self):
-        if self.media_info.playback:
+    def media_url(self) -> str | None:
+        if self.media_info and self.media_info.playback:
             return self.media_info.playback.url
-        return self.media_info.mp4_hd_url or self.media_info.mp4_sd_url
+        if self.media_info:
+            return self.media_info.mp4_hd_url or self.media_info.mp4_sd_url
+        return None
 
     @property
-    def thumb_url(self):
+    def thumb_url(self) -> str | None:
         return self.page_pic
 
     @property
-    def height(self):
-        if self.media_info.playback:
+    def height(self) -> int:
+        if self.media_info and self.media_info.playback:
             return self.media_info.playback.height
         return 0
 
     @property
-    def width(self):
-        if self.media_info.playback:
+    def width(self) -> int:
+        if self.media_info and self.media_info.playback:
             return self.media_info.playback.width
         return 0
 
     @property
-    def duration(self):
-        return self.media_info.duration
+    def duration(self) -> int:
+        return self.media_info.duration if self.media_info else 0
 
 
 @dataclass
 class Pic:
-    url: str = None
-    width: int = None
-    height: int = None
-    cut_type: int = None
+    url: str | None = None
+    width: int | None = None
+    height: int | None = None
+    cut_type: int | None = None
     type: str | None = None
 
 
@@ -152,11 +214,11 @@ class PicInfo(Info):
     video为livephoto和gif视频
     """
 
-    pic_id: str = None
-    type: MediaType = None
-    thumbnail: Pic = None
-    largest: Pic = None
-    video: str = None
+    pic_id: str | None = None
+    type: MediaType | None = None
+    thumbnail: Pic | None = None
+    largest: Pic | None = None
+    video: str | None = None
 
     @staticmethod
     def parse(pic_dict: dict) -> "PicInfo":
@@ -165,65 +227,66 @@ class PicInfo(Info):
             type=MediaType(pic_dict["type"]),
             thumbnail=Pic(**pic_dict["thumbnail"]),
             largest=Pic(**pic_dict["largest"]),
-            video=pic_dict.get("video_hd") or pic_dict.get("video"),
+            video=pic_dict.get("video"),
         )
 
     @property
-    def media_url(self):
-        return self.largest.url if self.type == MediaType.PHOTO else self.video
+    def media_url(self) -> str | None:
+        return self.largest.url if self.type == MediaType.PHOTO and self.largest else self.video
 
     @property
-    def thumb_url(self):
-        return self.thumbnail.url
+    def thumb_url(self) -> str | None:
+        return self.thumbnail.url if self.thumbnail else None
 
     @property
-    def height(self):
-        return self.largest.height
+    def height(self) -> int:
+        return self.largest.height if self.largest and self.largest.height is not None else 0
 
     @property
-    def width(self):
-        return self.largest.width
+    def width(self) -> int:
+        return self.largest.width if self.largest and self.largest.width is not None else 0
 
     @property
-    def duration(self):
+    def duration(self) -> int:
         return 0
 
 
 @dataclass
 class MixMediaInfoItem(Info):
-    type: MediaType = None
-    data: PageInfo | PicInfo = None
+    type: MediaType | None = None
+    data: PageInfo | PicInfo | None = None
 
     @property
-    def media_url(self):
-        return self.data.media_url
+    def media_url(self) -> str | None:
+        return self.data.media_url if self.data else None
 
     @property
-    def thumb_url(self):
-        return self.data.thumb_url
+    def thumb_url(self) -> str | None:
+        return self.data.thumb_url if self.data else None
 
     @property
-    def height(self):
-        return self.data.height
+    def height(self) -> int:
+        return self.data.height if self.data else 0
 
     @property
-    def width(self):
-        return self.data.width
+    def width(self) -> int:
+        return self.data.width if self.data else 0
 
     @property
-    def duration(self):
-        return self.data.duration
+    def duration(self) -> int:
+        return self.data.duration if self.data else 0
 
 
 @dataclass
 class MixMediaInfo:
-    items: list[MixMediaInfoItem] = None
+    items: list[MixMediaInfoItem] | None = None
 
     @staticmethod
     def parse(mix_media_info_dict: dict) -> "MixMediaInfo":
-        items = []
+        items: list[MixMediaInfoItem] = []
         for item_dict in mix_media_info_dict["items"]:
             type_ = MediaType(item_dict["type"])
+            data: PageInfo | PicInfo | None
             if type_ == MediaType.PHOTO:
                 data = PicInfo.parse(item_dict["data"])
             elif type_ == MediaType.VIDEO:
@@ -236,14 +299,14 @@ class MixMediaInfo:
 
 @dataclass
 class Data:
-    id: str = None
-    mid: str = None
-    text: str = None  # 带html标签
-    text_raw: str = None  # 纯文本
-    pic_infos: list[PicInfo] = None
-    page_info: PageInfo = None
-    mix_media_info: MixMediaInfo = None
-    retweeted_status: "Data" = None
+    id: str | None = None
+    mid: str | None = None
+    text: str | None = None  # 带html标签
+    text_raw: str | None = None  # 纯文本
+    pic_infos: list[PicInfo] | None = None
+    page_info: PageInfo | None = None
+    mix_media_info: MixMediaInfo | None = None
+    retweeted_status: "Data | None" = None
 
     @staticmethod
     def parse(data_dict: dict) -> "Data":
@@ -258,7 +321,7 @@ class Data:
         return Data.from_kwargs(**data_dict)
 
     @classmethod
-    def from_kwargs(cls, **kwargs):
+    def from_kwargs(cls, **kwargs: Any) -> "Data":
         cls_fields = set(signature(cls).parameters)
 
         native_args, new_args = {}, {}
@@ -275,9 +338,9 @@ class Data:
         return ret
 
     @property
-    def content(self):
+    def content(self) -> str:
         """干净的正文"""
-        text = self.text_raw
+        text = self.text_raw or ""
         if short_url := (self.page_info and self.page_info.short_url):
             text = text.replace(short_url, "")
         return text.strip()
@@ -287,11 +350,31 @@ class Data:
 class WeiboContent:
     data: Data
 
-    @staticmethod
-    def parse(json_dict: dict) -> "WeiboContent":
+    @classmethod
+    def parse(cls, json_dict: dict) -> Self:
         data = Data.parse(json_dict)
-        return WeiboContent(data=data)
+        return cls(data=data)
+
+
+@dataclass
+class WeiboTVContent:
+    text: str
+    video_url: str
+    video_duration: float
+    cover_image: str
+
+    @classmethod
+    def parse(cls, json_dict: dict) -> Self:
+        data = json_dict["data"]
+        cpp = data["Component_Play_Playinfo"]
+
+        cover_image = f"https:{cpp['cover_image']}"
+        duration_time = cpp["duration_time"]
+        text = cpp["text"]
+        urls: dict[str, str] = cpp["urls"]
+        video_url = f"https:{list(urls.values())[0]}"
+        return cls(text=text, video_url=video_url, video_duration=duration_time, cover_image=cover_image)
 
 
 if __name__ == "__main__":
-    print(asyncio.run(WeiboAPI().parse("https://weibo.com/3208333150/Ow0iEbEX0")))
+    print(asyncio.run(WeiboAPI().parse("https://weibo.com/tv/show/1034:5306598453608528")))

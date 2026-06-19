@@ -1,6 +1,10 @@
+# mypy: disable-error-code=no-untyped-def
+from __future__ import annotations
+
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Union
+from typing import Literal, NamedTuple
 
 import httpx
 from loguru import logger
@@ -10,7 +14,7 @@ from ..types import ParseError
 
 
 class Twitter:
-    def __init__(self, proxy: str | None = None, cookie: dict = None):
+    def __init__(self, proxy: str | None = None, cookie: dict | None = None):
         self.proxy = proxy
         self.authorization = (
             "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOu"
@@ -18,21 +22,20 @@ class Twitter:
         )
         self.cookie = cookie
 
-    async def fetch_tweet(self, url: str) -> "TwitterTweet":
+    async def fetch_tweet(self, url: str) -> TwitterTweet:
         tweet_id = self.get_id_by_url(url)
         headers = {
             "accept-language": "zh-CN,zh;q=0.9",
             "authorization": self.authorization,
             "content-type": "application/json",
             "user-agent": GlobalConfig.ua,
-            "x-guest-token": await self.get_guest_token(url),
             "x-twitter-active-user": "yes",
             "x-twitter-client-language": "zh-cn",
         }
 
         cookie = None
         if self.cookie and self.check_cookie():
-            headers["x-csrf-token"] = self.cookie.get("ct0")
+            headers["x-csrf-token"] = self.cookie.get("ct0", "")
             cookie = self.cookie
 
         params = {
@@ -70,8 +73,7 @@ class Twitter:
         response.raise_for_status()
         return self.parse(response.json())
 
-    @staticmethod
-    def parse(result: dict):
+    def parse(self, result: dict) -> TwitterTweet:
         if e := result.get("errors"):
             raise Exception(f"error -1: {e[0]['message']}")
 
@@ -81,15 +83,19 @@ class Twitter:
 
         if tweet := result.get("tweet"):
             tweet_id = tweet.get("rest_id", {})
-            legacy: dict = tweet.get("legacy")
+            legacy: dict | None = tweet.get("legacy")
         else:
             tweet_id = result.get("rest_id", {})
-            legacy: dict = result.get("legacy")
+            legacy = result.get("legacy")
 
         if not legacy:
             if result.get("__typename") == "TweetTombstone":
                 raise Exception("error -2: 该推文开启了限制, 匿名用户无法查看")
             raise Exception(f"error -3: {result.get('reason')}")
+
+        if article := result.get("article", {}):
+            ta = ArticleRenderer(article["article_results"]["result"]).render()
+            return TwitterTweet(tweet_id=tweet_id, article=ta)
 
         if note_tweet := result.get("note_tweet"):
             full_text = note_tweet.get("note_tweet_results", {}).get("result", {}).get("text", None)
@@ -99,39 +105,61 @@ class Twitter:
             full_text = legacy.get("full_text", "")
 
         media = legacy["entities"].get("media", [])
-        medias = []
+        media_list: list[TwitterVideo | TwitterPhoto | TwitterAni] = []
         for i in media:
+            original_info = i.get("original_info", {})
+            height = original_info.get("height", 0)
+            width = original_info.get("width", 0)
+            media_url_https = i["media_url_https"]
+
             match i["type"]:
                 case "photo":
-                    medias.append(TwitterPhoto(url=i["media_url_https"]))
+                    media_list.append(
+                        TwitterPhoto(
+                            url=self._build_img_url(media_url_https, "orig"),
+                            width=width,
+                            height=height,
+                            thumb_url=self._build_img_url(media_url_https, "small"),
+                        )
+                    )
                 case "video":
-                    original_info = i.get("original_info", {})
-                    medias.append(
+                    video_info = i.get("video_info", {})
+                    media_list.append(
                         TwitterVideo(
-                            url=i["video_info"]["variants"][-1]["url"],
-                            height=original_info.get("height", 0),
-                            width=original_info.get("width", 0),
+                            url=video_info["variants"][-1]["url"],
+                            height=height,
+                            width=width,
+                            duration_millis=video_info.get("duration_millis", 0),
+                            thumb_url=self._build_img_url(media_url_https, "medium"),
                         )
                     )
                 case "animated_gif":
-                    medias.append(TwitterAni(url=i["video_info"]["variants"][-1]["url"]))
+                    media_list.append(
+                        TwitterAni(
+                            url=i["video_info"]["variants"][-1]["url"],
+                            height=height,
+                            width=width,
+                            thumb_url=self._build_img_url(media_url_https, "small"),
+                        )
+                    )
 
-        return TwitterTweet(tweet_id=tweet_id, full_text=full_text, media=medias)
+        return TwitterTweet(tweet_id=tweet_id, full_text=full_text, media=media_list or None)
 
     @staticmethod
-    def get_id_by_url(url: str):
-        return re.search(r"status/(\d+)", url)[1]
+    def _build_img_url(url: str, size: Literal["orig", "large", "medium", "small", "thumb"]):
+        p = "&" if "?" in url else "?"
+        return f"{url}{p}name={size}"
 
-    async def get_guest_token(self, url: str):
-        async with httpx.AsyncClient(proxy=self.proxy) as client:
-            response = await client.post(url)
-            response.raise_for_status()
-        guest_token = re.search(r'cookie="gt=(\d+);', response.text)
-        if not guest_token:
-            raise Exception("error -5: 获取 guest_token 失败")
-        return guest_token[1]
+    @staticmethod
+    def get_id_by_url(url: str) -> str:
+        match = re.search(r"status/(\d+)", url)
+        if not match:
+            raise ValueError(f"Invalid tweet url: {url}")
+        return match[1]
 
-    def check_cookie(self):
+    def check_cookie(self) -> bool:
+        if not self.cookie:
+            return False
         if not self.cookie.get("ct0"):
             logger.warning("cookie 缺少必要参数: ct0")
             return False
@@ -145,12 +173,21 @@ class TwitterTweet:
     def __init__(
         self,
         tweet_id: str,
-        full_text: str,
-        media: list[Union["TwitterVideo", "TwitterPhoto", "TwitterAni"]],
+        full_text: str | None = None,
+        media: list[TwitterVideo | TwitterPhoto | TwitterAni] | None = None,
+        article: TwitterArticle | None = None,
     ):
         self.tweet_id = tweet_id
-        self.full_text = re.sub(r"https://t\.co/[^\s,]+$", "", full_text) if media else full_text
+        self.full_text = re.sub(r"https://t\.co/[^\s,]+$", "", full_text or "") if media else full_text
         self.media = media
+        self.article = article
+
+
+@dataclass
+class TwitterArticle:
+    title: str
+    content: str
+    media: list[TwitterVideo | TwitterPhoto] | None = None
 
 
 @dataclass
@@ -158,13 +195,213 @@ class TwitterVideo:
     url: str
     height: int
     width: int
+    duration_millis: int
+    thumb_url: str | None = None
 
 
 @dataclass
 class TwitterPhoto:
     url: str
+    height: int
+    width: int
+    thumb_url: str | None = None
 
 
 @dataclass
 class TwitterAni:
     url: str
+    height: int
+    width: int
+    thumb_url: str | None = None
+
+
+class _Insertion(NamedTuple):
+    """待插入原文的 Markdown 标记。"""
+
+    idx: int
+    text: str
+    kind: str  # "start" | "end" | "atomic"
+    length: int = 0
+
+
+class ArticleRenderer:
+    """将 Twitter Article JSON 解析并渲染为 Markdown。"""
+
+    # 行内样式 → Markdown 标记
+    _INLINE_STYLES: dict[str, str] = {
+        "Bold": "**",
+        "Italic": "*",
+        "Strikethrough": "~~",
+    }
+
+    # 块级类型 → 格式化函数
+    _BLOCK_FORMATTERS: dict[str, Callable[[str], str]] = {
+        "header-one": lambda t: f"# {t}",
+        "header-two": lambda t: f"## {t}",
+        "header-three": lambda t: f"### {t}",
+        "blockquote": lambda t: "\n".join(f"> {line}" for line in t.split("\n")),
+        "ordered-list-item": lambda t: f"1. {t}",
+        "unordered-list-item": lambda t: f"- {t}",
+    }
+
+    def __init__(self, article_data: dict):
+        self._data = article_data
+        self._media_dict: dict = {}
+        self._media_result: list[TwitterPhoto | TwitterVideo] = []
+
+    # ── 公共入口 ──────────────────────────────
+
+    def render(self) -> TwitterArticle:
+        content_state = self._data.get("content_state", {})
+        blocks = content_state.get("blocks", [])
+        entity_map = {str(item["key"]): item["value"] for item in content_state.get("entityMap", [])}
+        title = self._data.get("title", "")
+
+        self._parse_media_entities()
+        cover_url = self._data.get("cover_media", {}).get("media_info", {}).get("original_img_url", "")
+
+        md_lines: list[str] = []
+        if cover_url:
+            md_lines.append(f"![Cover Image]({cover_url})\n")
+
+        for block in blocks:
+            md_lines.append(self._render_block(block, entity_map))
+
+        return TwitterArticle(
+            title=title,
+            content="\n\n".join(md_lines),
+            media=self._media_result or None,
+        )
+
+    # ── 媒体解析 ──────────────────────────────
+
+    def _parse_media_entities(self) -> None:
+        for media in self._data.get("media_entities", []):
+            media_id = media.get("media_id")
+            media_info = media.get("media_info", {})
+            typename = media_info.get("__typename")
+
+            if typename == "ApiImage":
+                self._parse_image(media_id, media_info)
+            elif typename == "ApiVideo":
+                self._parse_video(media_id, media_info)
+
+    def _parse_image(self, media_id, info: dict) -> None:
+        url = info.get("original_img_url", "")
+        if media_id and url:
+            self._media_dict[media_id] = {"type": "image", "url": url}
+        self._media_result.append(
+            TwitterPhoto(
+                url=url,
+                height=info.get("original_img_height", 0),
+                width=info.get("original_img_width", 0),
+            )
+        )
+
+    def _parse_video(self, media_id, info: dict) -> None:
+        preview = info.get("preview_image", {})
+        preview_url = preview.get("original_img_url", "")
+        video_url = self._best_mp4_url(info.get("variants", []))
+
+        if media_id and preview_url:
+            self._media_dict[media_id] = {
+                "type": "video",
+                "preview_url": preview_url,
+                "video_url": video_url,
+            }
+        self._media_result.append(
+            TwitterVideo(
+                url=video_url,
+                height=preview.get("original_img_height", 0),
+                width=preview.get("original_img_width", 0),
+                duration_millis=info.get("duration_millis", 0),
+                thumb_url=preview_url,
+            )
+        )
+
+    @staticmethod
+    def _best_mp4_url(variants: list) -> str:
+        mp4s = [v for v in variants if v.get("content_type") == "video/mp4"]
+        if not mp4s:
+            return ""
+        return str(max(mp4s, key=lambda v: v.get("bit_rate", 0)).get("url", ""))
+
+    # ── Block 渲染 ────────────────────────────
+
+    def _render_block(self, block: dict, entity_map: dict) -> str:
+        b_type = block.get("type", "unstyled")
+        text = block.get("text", "")
+
+        insertions = self._collect_inline_styles(block)
+        insertions += self._collect_entities(block, entity_map)
+        insertions.sort(key=self._insertion_sort_key)
+
+        final_text = self._apply_insertions(text, insertions)
+        formatter = self._BLOCK_FORMATTERS.get(b_type)
+        return formatter(final_text) if formatter else final_text
+
+    @staticmethod
+    def _collect_inline_styles(block: dict) -> list[_Insertion]:
+        result: list[_Insertion] = []
+        for style in block.get("inlineStyleRanges", []):
+            marker = ArticleRenderer._INLINE_STYLES.get(style["style"])
+            if not marker:
+                continue
+            offset, length = style["offset"], style["length"]
+            result.append(_Insertion(offset, marker, "start", length))
+            result.append(_Insertion(offset + length, marker, "end", length))
+        return result
+
+    def _collect_entities(self, block: dict, entity_map: dict) -> list[_Insertion]:
+        result: list[_Insertion] = []
+        for ent in block.get("entityRanges", []):
+            offset, length = ent["offset"], ent["length"]
+            ent_data = entity_map.get(str(ent["key"]), {})
+            ent_type = ent_data.get("type")
+
+            if ent_type == "LINK":
+                url = ent_data.get("data", {}).get("url", "")
+                result.append(_Insertion(offset, "[", "start", length))
+                result.append(_Insertion(offset + length, f"]({url})", "end", length))
+
+            elif ent_type == "MEDIA":
+                md = self._media_entity_to_md(ent_data)
+                if md:
+                    result.append(_Insertion(offset, md, "atomic", length))
+
+            elif ent_type == "DIVIDER":
+                result.append(_Insertion(offset, "\n---\n", "atomic", length))
+
+        return result
+
+    def _media_entity_to_md(self, ent_data: dict) -> str:
+        media_items = ent_data.get("data", {}).get("mediaItems", [])
+        if not media_items:
+            return ""
+        obj = self._media_dict.get(media_items[0].get("mediaId"))
+        if not obj:
+            return ""
+
+        if obj["type"] == "image":
+            return f"![Image]({obj['url']})"
+        if obj["type"] == "video":
+            p, v = obj["preview_url"], obj["video_url"]
+            return f"[![Video]({p})]({v})" if v else f"![Video Preview]({p})"
+        return ""
+
+    # ── 文本拼装 ──────────────────────────────
+
+    @staticmethod
+    def _insertion_sort_key(ins: _Insertion) -> tuple:
+        weight = {"end": 1, "atomic": 0, "start": -1}.get(ins.kind, 0)
+        return -ins.idx, weight, ins.length
+
+    @staticmethod
+    def _apply_insertions(text: str, insertions: list[_Insertion]) -> str:
+        chars = list(text)
+        for ins in insertions:
+            if ins.kind == "atomic" and ins.idx < len(chars):
+                chars[ins.idx] = ins.text
+            else:
+                chars.insert(ins.idx, ins.text)
+        return "".join(chars)

@@ -1,49 +1,64 @@
-from ..base.base import BaseParser
-from ...types import Image, ImageParseResult
-from ...provider_api.pttcc import PTTCC
-from ...config import DownloadConfig, GlobalConfig
-from collections.abc import Awaitable, Callable
+from __future__ import annotations
+
 from pathlib import Path
-from ...types import DownloadResult, ImageParseResult
 
-class PTTParser(BaseParser):
-    __platform_id__ = "ptt"
-    __platform__ = "PTT"
-    __supported_type__ = ["图文"]
-    __match__ = r"^(http(s)?://)?.+ptt.cc/bbs/.*"
+from ...config import GlobalConfig
+from ...provider_api.pttcc import PTTCC
+from ...types import DownloadResult, ImageRef, ProgressCallback, RichTextParseResult
+from ...types.platform import Platform
+from ..base.base import BaseParser
 
-    async def parse(self, url: str) -> "PTTImageParseResult":
-        url = await self.get_raw_url(url)
-        parsed = await PTTCC.parse(url, proxy=self.cfg.proxy, cookies=self.cfg.cookie)
-        media = [Image(path=img, thumb_url=img) for img in (parsed.imgs or [])]
-        return PTTImageParseResult(
-            title=parsed.title or "",
-            photo=media,
-            desc=parsed.text_content or parsed.markdown_content or "",
-            raw_url=url,
-            pttcc=parsed,
-            proxy=self.cfg.proxy,
+
+class PTTRichTextParseResult(RichTextParseResult):
+    def __init__(
+        self,
+        *,
+        title: str | None = "",
+        media: list[ImageRef] | None = None,
+        markdown_content: str | None = "",
+        proxy: str | None = None,
+    ):
+        self.parse_proxy = proxy
+        super().__init__(title=title, media=media, markdown_content=markdown_content)
+
+    async def _do_download(
+        self,
+        *,
+        output_dir: str | Path,
+        callback: ProgressCallback | None = None,
+        callback_args: tuple = (),
+        callback_kwargs: dict | None = None,
+        proxy: str | None = None,
+        headers: dict | None = None,
+    ) -> DownloadResult:
+        resolved_proxy = proxy or self.parse_proxy
+        resolved_headers = {"User-Agent": GlobalConfig.ua}
+        if headers:
+            resolved_headers.update(headers)
+        return await super()._do_download(
+            output_dir=output_dir,
+            callback=callback,
+            callback_args=callback_args,
+            callback_kwargs=callback_kwargs,
+            proxy=resolved_proxy,
+            headers=resolved_headers,
         )
 
 
-class PTTImageParseResult(ImageParseResult):
-    def __init__(self, title: str, photo: list[str], desc: str, raw_url: str, pttcc: "PTTCC", proxy: str = None):
-        super().__init__(title, photo, desc, raw_url)
-        self.pttcc = pttcc
-        self.proxy = proxy
-    
-    async def download(
-        self,
-        path: str | Path = None,
-        callback: Callable[[int, int, str | None, tuple], Awaitable[None]] = None,
-        callback_args: tuple = (),
-        config: DownloadConfig = DownloadConfig(),
-    ) -> DownloadResult:
-        if self.proxy:
-            config.proxy = self.proxy
-        headers = config.headers or {"User-Agent": GlobalConfig.ua}
-        
-        config.headers = headers
-        return await super().download(path, callback, callback_args, config)
+class PTTParser(BaseParser):
+    __platform__ = Platform.PTT
+    __supported_type__ = ["图文"]
+    __match__ = r"^(http(s)?://)?.+ptt\.cc/bbs/.*"
 
-__all__ = ["PTTParser", "PTTImageParseResult"]
+    async def _do_parse(self, raw_url: str) -> PTTRichTextParseResult:
+        parsed = await PTTCC.parse(raw_url, proxy=self.proxy, cookies=self.cookie)
+        media = [ImageRef(url=img, thumb_url=img) for img in (parsed.imgs or [])]
+        return PTTRichTextParseResult(
+            title=parsed.title or "",
+            media=media,
+            markdown_content=parsed.markdown_content or parsed.text_content or "",
+            proxy=self.proxy,
+        )
+
+
+__all__ = ["PTTParser", "PTTRichTextParseResult"]

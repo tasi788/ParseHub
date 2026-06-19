@@ -1,61 +1,123 @@
+import importlib
+import pkgutil
 import re
 from abc import ABC, abstractmethod
-from urllib.parse import parse_qs, urlparse
+from typing import Any
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
 
-from ...config.config import GlobalConfig, ParseConfig
-from ...types import ParseError, ParseResult
-from ...utiles.utile import match_url
+from ... import parsers
+from ...config.config import GlobalConfig
+from ...types import AnyParseResult, ParseError
+from ...types.platform import Platform
+from ...utils.utils import match_url, normalize_cookie
 
 
 class BaseParser(ABC):
-    __platform_id__: str = None
-    """平台ID"""
-    __platform__: str = None
-    """平台名称"""
+    _registry: list[type["BaseParser"]] = []
+    _registry_initialized: bool = False
+
+    __platform__: Platform | None = None
+    """平台"""
     __supported_type__: list[str] = []
     """支持的类型, 例如: 图文, 视频, 动态"""
-    __match__: str = None
-    """链接匹配规则"""
+    __match__: str | None = None
+    """匹配规则"""
     __reserved_parameters__: list[str] = []
     """要保留的参数, 例如翻页. 默认清除全部参数"""
+    __after_clean_parameters__: list[str] = []
+    """解析完成后需要清理的参数, 在解析完成前会保留这些参数, 优先级高于 __reserved_parameters__"""
     __redirect_keywords__: list[str] = []
     """如果链接包含其中之一, 则遵循重定向规则"""
 
-    def __init__(self, parse_config: ParseConfig = None):
-        if parse_config is None:
-            parse_config = ParseConfig()
-        self.cfg = parse_config
+    def __init__(self, *, proxy: str | None = None, cookie: str | dict | None = None):
+        self.proxy = proxy
+        self.cookie = normalize_cookie(cookie)
 
-    def match(self, url: str) -> bool:
+    def __init_subclass__(cls, /, register: bool = True, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        if register:
+            if not cls.__platform__:
+                raise ValueError(
+                    f"解析器未指定平台: {cls}, 如果不是平台请使用 register=False, "
+                    f"例: class {cls.__name__}({BaseParser.__name__}, register=False): ..."
+                )
+            cls._registry.append(cls)
+
+    @classmethod
+    def get_registry(cls) -> list[type["BaseParser"]]:
+        if not cls._registry_initialized:
+            for _, name, _ in pkgutil.walk_packages(parsers.__path__, f"{parsers.__name__}."):
+                importlib.import_module(name)
+            cls._registry_initialized = True
+        return cls._registry.copy()
+
+    @classmethod
+    def match(cls, text: str) -> bool:
         """判断是否匹配该解析器"""
-        url = match_url(url)
-        return bool(re.match(self.__match__, url))
+        url = match_url(text)
+        return bool(cls.__match__ and re.match(cls.__match__, url))
+
+    async def parse(self, url: str) -> AnyParseResult:
+        """解析
+        :param url: 分享文案 / 分享链接
+        :return: 解析结果
+        """
+        raw_url = await self.get_raw_url(url, clean_all=False)
+        result = await self._do_parse(raw_url)
+        result.platform = self.__platform__
+        raw_url_clean = self._clean_params(raw_url, self.__after_clean_parameters__)
+        result.raw_url = raw_url_clean
+        return result
 
     @abstractmethod
-    async def parse(self, url: str) -> ParseResult:
-        """解析"""
+    async def _do_parse(self, raw_url: str) -> AnyParseResult:
+        """解析
+        :param raw_url: 重定向后的没有跟踪参数的原始链接
+        """
         raise NotImplementedError
 
-    async def get_raw_url(self, url: str) -> str:
+    async def get_raw_url(self, url: str, clean_all: bool = False) -> str:
         """
         清除链接中的参数
         :param url: 链接
+        :param clean_all: 是否清除全部可清除的参数 (包括解析后才需清除的参数)
+
+        Example:
+            以小红书为例，其解析器配置如下::
+
+                __reserved_parameters__ = []
+                __after_clean_parameters__ = ["xsec_token"]
+
+            原始链接::
+
+                https://www.xiaohongshu.com/explore/abc123?xsec_token=xxx&tracking=yyy
+
+            ``clean_all=False`` (解析阶段，保留解析所需的参数)::
+
+                https://www.xiaohongshu.com/explore/abc123?xsec_token=xxx
+                # tracking 被清除，xsec_token 保留（解析时需要它）
+
+            ``clean_all=True`` (最终输出，清除所有非必要参数)::
+
+                https://www.xiaohongshu.com/explore/abc123
+                # xsec_token 也被清除，返回干净的链接
+
         :return:
         """
-        url = match_url(url)
+        matched_url = match_url(url)
+        url = matched_url or url
         if not url.startswith("http"):
             url = f"https://{url}"
         if any(x in url for x in self.__redirect_keywords__):
-            async with httpx.AsyncClient(proxy=self.cfg.proxy, timeout=30) as client:
+            async with httpx.AsyncClient(proxy=self.proxy, timeout=30) as client:
                 try:
                     r = await client.get(
                         url,
                         follow_redirects=True,
                         headers={"User-Agent": GlobalConfig.ua},
                     )
-                    r.raise_for_status()
                 except (httpx.ReadTimeout, httpx.ConnectTimeout) as e:
                     raise ParseError("获取原始链接超时") from e
                 except Exception as e:
@@ -66,7 +128,23 @@ class BaseParser(ABC):
         query_params = parse_qs(parsed_url.query)
 
         for i in query_params.copy().keys():
-            if i not in self.__reserved_parameters__:
-                del query_params[i]
-        new_query = "&".join([f"{k}={v[0]}" for k, v in query_params.items()])
+            is_reserved = i in self.__reserved_parameters__
+            is_after_clean = i in self.__after_clean_parameters__
+            keep = (is_reserved and not (clean_all and is_after_clean)) or (is_after_clean and not clean_all)
+            if not keep:
+                query_params.pop(i, None)
+
+        new_query = urlencode(query_params, doseq=True)
+        return parsed_url._replace(query=new_query).geturl()
+
+    @staticmethod
+    def _clean_params(url: str, params: list[str]) -> str:
+        """清除链接中的指定参数"""
+        if not params:
+            return url
+        parsed_url = urlparse(url)
+        query_params = parse_qs(parsed_url.query)
+        for p in params:
+            query_params.pop(p, None)
+        new_query = urlencode(query_params, doseq=True)
         return parsed_url._replace(query=new_query).geturl()

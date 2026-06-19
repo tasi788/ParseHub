@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from urllib.parse import urljoin
 
@@ -16,13 +18,15 @@ class PTTCC:
     imgs: list[str] | None = None
 
     @classmethod
-    async def parse(cls, url: str, proxy: str = None, cookies: dict | None = None) -> "PTTCC":
+    async def parse(cls, url: str, proxy: str | None = None, cookies: dict | None = None) -> PTTCC:
         request_cookies = {"over18": "1"}
         if isinstance(cookies, dict):
             request_cookies.update(cookies)
 
         async with httpx.AsyncClient(
-            headers={"User-Agent": GlobalConfig.ua}, proxy=proxy, cookies=request_cookies
+            headers={"User-Agent": GlobalConfig.ua},
+            proxy=proxy,
+            cookies=request_cookies,
         ) as client:
             response = await client.get(url)
         response.raise_for_status()
@@ -43,39 +47,35 @@ class PTTCC:
                 title = value.text.strip()
             metaline.decompose()
 
-        # 先移除 -- 分隔線之後的所有內容（包含推文區的作者留言）
-        # 找到最後一個 -- 分隔線，且下一行包含 "※ 發信站"
         separator_element = None
         for element in content.descendants:
-            if element.string and element.string.strip() == "--":
-                # 檢查下一個兄弟元素是否包含 "※ 發信站"
-                next_sibling = element.next_sibling
-                while next_sibling:
-                    if hasattr(next_sibling, 'get_text'):
-                        sibling_text = next_sibling.get_text()
-                    elif isinstance(next_sibling, str):
-                        sibling_text = next_sibling
-                    else:
-                        sibling_text = ""
-                    
-                    if "※ 發信站" in sibling_text:
-                        separator_element = element
-                        break
-                    # 只檢查緊鄰的幾個元素
-                    if sibling_text.strip():
-                        break
-                    next_sibling = next_sibling.next_sibling
-        
-        # 移除找到的分隔線及之後的所有內容
+            element_string = getattr(element, "string", None)
+            if not isinstance(element_string, str) or element_string.strip() != "--":
+                continue
+
+            next_sibling = element.next_sibling
+            while next_sibling:
+                if hasattr(next_sibling, "get_text"):
+                    sibling_text = next_sibling.get_text()
+                elif isinstance(next_sibling, str):
+                    sibling_text = next_sibling
+                else:
+                    sibling_text = ""
+
+                if "※ 發信站" in sibling_text:
+                    separator_element = element
+                    break
+                if sibling_text.strip():
+                    break
+                next_sibling = next_sibling.next_sibling
+
         if separator_element:
-            next_siblings = list(separator_element.next_siblings)
-            for sibling in next_siblings:
-                if hasattr(sibling, 'decompose'):
+            for sibling in list(separator_element.next_siblings):
+                if hasattr(sibling, "decompose"):
                     sibling.decompose()
-            if hasattr(separator_element, 'decompose'):
+            if hasattr(separator_element, "decompose"):
                 separator_element.decompose()
 
-        # 移除推文區（如果還有殘留）
         for push in content.select("div.push"):
             push.decompose()
 
@@ -89,7 +89,10 @@ class PTTCC:
         imgs: list[str] = []
         img_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
         for anchor in content.find_all("a", href=True):
-            href = anchor["href"].strip()
+            href_value = anchor.get("href")
+            if not isinstance(href_value, str):
+                continue
+            href = href_value.strip()
             if not href:
                 continue
             absolute_href = urljoin(url, href)
@@ -125,10 +128,16 @@ class PTTCC:
 
         if not (text_content or imgs):
             meta_desc = soup.find("meta", attrs={"name": "description"})
-            if meta_desc and (desc := meta_desc.get("content", "").strip()):
-                text_content = desc
+            if meta_desc:
+                desc = meta_desc.get("content")
+                if isinstance(desc, str) and desc.strip():
+                    text_content = desc.strip()
 
         if title or text_content or imgs:
-            return cls(title=title, markdown_content=markdown_content, text_content=text_content, imgs=imgs or None)
-
+            return cls(
+                title=title,
+                markdown_content=markdown_content,
+                text_content=text_content,
+                imgs=imgs or None,
+            )
         raise ValueError("获取内容失败")

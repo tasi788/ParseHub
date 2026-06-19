@@ -1,26 +1,80 @@
 from typing import Union
 
-from ...provider_api.tieba import TieBa
-from ...types import ImageParseResult, ParseError, VideoParseResult
+import httpx
+
+from ...provider_api.tieba import TieBa, TieBaError, TieBaPostType, TieBaVideo
+from ...types import AniRef, ImageParseResult, ImageRef, ParseError, Platform, VideoParseResult, VideoRef
 from ..base.base import BaseParser
 
 
 class TieBaParser(BaseParser):
-    __platform_id__ = "tieba"
-    __platform__ = "贴吧"
+    __platform__ = Platform.TIEBA
     __supported_type__ = ["视频", "图文"]
     __match__ = r"^(http(s)?://)?.+tieba.baidu.com/p/\d+"
 
-    async def parse(self, url: str) -> Union["ImageParseResult", "VideoParseResult"]:
+    async def _do_parse(self, raw_url: str) -> Union["ImageParseResult", "VideoParseResult"]:
         try:
-            tb = await TieBa(self.cfg.proxy).parse(url)
+            tb = await TieBa(self.proxy).parse(raw_url)
+        except TieBaError as e:
+            raise ParseError(e.msg if e.msg else "贴吧解析失败: 未知错误") from e
         except Exception as e:
-            raise ParseError("贴吧解析失败") from e
+            raise ParseError("贴吧解析失败: 未知错误") from e
 
-        if tb.video_url:
-            return VideoParseResult(title=tb.title, video=tb.video_url, raw_url=url, desc=tb.content)
-        else:
-            return ImageParseResult(title=tb.title, photo=tb.img_url, raw_url=url, desc=tb.content)
+        match tb.type:
+            case TieBaPostType.VIDEO:
+                if not isinstance(tb.media, TieBaVideo):
+                    raise ParseError("贴吧解析失败: 未获取到视频")
+                return VideoParseResult(
+                    title=tb.title,
+                    video=VideoRef(
+                        url=tb.media.url,
+                        thumb_url=tb.media.thumb_url,
+                        width=tb.media.width,
+                        height=tb.media.height,
+                        duration=tb.media.duration,
+                    ),
+                    content=tb.content,
+                )
+
+            case TieBaPostType.PHOTO:
+                images: list[ImageRef | AniRef] = []
+                if isinstance(tb.media, list):
+                    for i in tb.media:
+                        async with httpx.AsyncClient(proxy=self.proxy) as cli:
+                            try:
+                                r = await cli.head(i.url)
+                                r.raise_for_status()
+                            except Exception:
+                                images.append(
+                                    ImageRef(
+                                        url=i.url,
+                                        thumb_url=i.thumb_url,
+                                        width=i.width,
+                                        height=i.height,
+                                    )
+                                )
+                            else:
+                                headers = r.headers
+                                if (t := headers.get("content-type")) and "gif" in t:
+                                    images.append(
+                                        AniRef(
+                                            url=i.url,
+                                            thumb_url=i.thumb_url,
+                                            width=i.width,
+                                            height=i.height,
+                                        )
+                                    )
+                                else:
+                                    images.append(
+                                        ImageRef(
+                                            url=i.url,
+                                            thumb_url=i.thumb_url,
+                                            width=i.width,
+                                            height=i.height,
+                                        )
+                                    )
+
+                return ImageParseResult(title=tb.title, content=tb.content, photo=images)
 
 
 __all__ = ["TieBaParser"]
