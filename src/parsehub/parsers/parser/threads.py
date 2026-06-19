@@ -6,7 +6,7 @@ from ..base.base import BaseParser
 class ThreadsParser(BaseParser):
     __platform__ = Platform.THREADS
     __supported_type__ = ["视频", "图文"]
-    __match__ = r"^(http(s)?://)?.+threads.com/@[\w.]+/post/.*"
+    __match__ = r"^(http(s)?://)?.+threads.com/(?:@)?[\w.]+/post/.*"
 
     async def _do_parse(self, raw_url: str) -> "MultimediaParseResult":
         post = await ThreadsAPI(proxy=self.proxy).parse(raw_url)

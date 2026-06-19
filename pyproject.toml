@@ -38,6 +38,7 @@ dependencies = [
     "opencv-python-headless>=4.13.0.92",
     "cryptography>=46.0.6",
     "gmssl>=3.2.2",
+    "stealth-requests>=2.0.4",
 ]
 
 [project.scripts]

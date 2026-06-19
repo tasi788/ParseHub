@@ -25,8 +25,9 @@ class ThreadsAPI:
             "x-fb-lsd": lsd,
         }
 
+        target_id = self.get_post_id_by_url(url)
         data = {
-            "route_url": f"/{self.get_username_by_url(url)}/post/{self.get_post_id_by_url(url)}/media",
+            "route_url": f"/{self.get_username_by_url(url)}/post/{target_id}",
             "routing_namespace": "barcelona_web",
             "__user": "0",
             "__a": "1",
@@ -39,11 +40,11 @@ class ThreadsAPI:
             response = await client.post("https://www.threads.com/ajax/route-definition", headers=headers, data=data)
             response.raise_for_status()
             jsonp = [json.loads(j.strip()) for j in response.text.strip().split("for (;;);") if j]
-            return ThreadsPost.parse(jsonp)
+            return ThreadsPost.parse(jsonp, target_id)
 
     @staticmethod
     def get_username_by_url(url: str) -> str:
-        u = re.search(r"/(@[\w.]+)/post/", url)
+        u = re.search(r"/(?:@)?([\w.]+)/post/", url)
         if not u:
             raise ValueError("从 URL 中获取用户名失败")
         return u[1]
@@ -80,23 +81,74 @@ class ThreadsPost:
     media: ThreadsMedia | list[ThreadsMedia] | None = None
 
     @classmethod
-    def parse(cls, jsonp: list[dict]) -> ThreadsPost:
+    def parse(cls, jsonp: list[dict], target_id: str) -> ThreadsPost:
         content = ""
         media: ThreadsMedia | list[ThreadsMedia] | None = []
-        for j in jsonp:
-            match j["__type"]:
-                case "first_response":
-                    content = cls._fetch_content(j)
-                case "preloader":
-                    if "BarcelonaLightboxDialogRootQueryRelayPreloader" in (j.get("id") or ""):
-                        media = cls._fetch_media(j)
-                case "last_response":
-                    ...
+
+        target_post, quote_post = cls._extract_target_and_quote(jsonp, target_id)
+        if target_post:
+            content = (target_post.get("caption") or {}).get("text", "")
+            media = cls._fetch_media(target_post)
+
+            if quote_post:
+                quote_author = quote_post.get("user", {}).get("username", "user")
+                quote_text = (quote_post.get("caption") or {}).get("text", "")
+                if cls._fetch_media(quote_post):
+                    quote_text = f"[图片] {quote_text}" if quote_text else "[图片]"
+                if quote_text:
+                    if len(quote_text) > 600:
+                        quote_text = quote_text[:600] + "......"
+                    content = f"<blockquote expandable>@{quote_author}:\n{quote_text}</blockquote>\n\n{content}"
+        else:
+            for j in jsonp:
+                match j.get("__type"):
+                    case "first_response":
+                        content = cls._fetch_content(j)
+                    case "preloader":
+                        if "BarcelonaLightboxDialogRootQueryRelayPreloader" in (j.get("id") or ""):
+                            media = cls._fetch_media(j)
+                    case "last_response":
+                        ...
+
         return cls(content=content, media=media)
+
+    @classmethod
+    def _extract_target_and_quote(cls, jsonp: list[dict], target_id: str) -> tuple[dict | None, dict | None]:
+        target_post = None
+        quote_post = None
+
+        def find_thread_items(data: dict | list) -> list[list[dict]]:
+            results: list[list[dict]] = []
+            if isinstance(data, dict):
+                if "thread_items" in data and isinstance(data["thread_items"], list):
+                    results.append(data["thread_items"])
+                for value in data.values():
+                    results.extend(find_thread_items(value))
+            elif isinstance(data, list):
+                for item in data:
+                    results.extend(find_thread_items(item))
+            return results
+
+        for items in find_thread_items(jsonp):
+            for index, item in enumerate(items):
+                post = item.get("post", {})
+                if post.get("code") == target_id:
+                    target_post = post
+                    if index > 0:
+                        quote_post = items[index - 1].get("post", {})
+                    break
+            if target_post:
+                break
+
+        if target_post and not quote_post:
+            share_info = target_post.get("text_post_app_info", {}).get("share_info", {})
+            quote_post = share_info.get("quoted_post")
+
+        return target_post, quote_post
 
     @staticmethod
     def _fetch_content(data: dict) -> str:
-        payload = data["payload"]
+        payload = data.get("payload", {})
         result = payload.get("result", {})
         # 尝试从 redirect_result 获取（用户更改名称后的情况）
         meta = result.get("redirect_result", {}).get("exports", {}).get("meta")
@@ -104,12 +156,13 @@ class ThreadsPost:
         if not meta:
             meta = result.get("exports", {}).get("meta")
         if not meta:
-            raise Exception("获取内容失败")
+            return ""
         return str(meta["title"])
 
     @staticmethod
     def _fetch_media(data: dict) -> ThreadsMedia | list[ThreadsMedia]:
-        data = data.get("result", {}).get("result", {}).get("data", {}).get("data")
+        if "result" in data:
+            data = data.get("result", {}).get("result", {}).get("data", {}).get("data")
         if not data:
             return []
 

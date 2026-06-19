@@ -256,6 +256,8 @@ class TestPlatformUrlMatching(unittest.TestCase):
                 "https://www.facebook.com/share/r/761988213517369/",
                 "https://www.facebook.com/example/videos/761988213517369/",
                 "https://www.facebook.com/reel/761988213517369",
+                "https://www.facebook.com/example/posts/1234567890123456",
+                "https://www.facebook.com/groups/example/permalink/1234567890123456/",
             ],
             Platform.INSTAGRAM: [
                 "https://www.instagram.com/p/C0example/",
@@ -273,9 +275,13 @@ class TestPlatformUrlMatching(unittest.TestCase):
                 "https://h5.pipix.com/s/example/",
                 "https://h5.pipix.com/ppx/item/1234567890",
             ],
+            Platform.PTT: [
+                "https://www.ptt.cc/bbs/Gossiping/M.1234567890.A.AAA.html",
+            ],
             Platform.THREADS: [
                 "https://www.threads.com/@zaborona.magazine/post/DBuqMBwMfxW",
                 "https://www.threads.com/@user_name/post/DBuqMBwMfxW",
+                "https://www.threads.com/user_name/post/DBuqMBwMfxW",
             ],
             Platform.TIEBA: [
                 "https://tieba.baidu.com/p/9939510114",
