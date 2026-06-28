@@ -94,7 +94,7 @@ class ThreadsPost:
                 quote_author = quote_post.get("user", {}).get("username", "user")
                 quote_text = (quote_post.get("caption") or {}).get("text", "")
                 if cls._fetch_media(quote_post):
-                    quote_text = f"[图片] {quote_text}" if quote_text else "[图片]"
+                    quote_text = f"[圖片] {quote_text}" if quote_text else "[圖片]"
                 if quote_text:
                     if len(quote_text) > 600:
                         quote_text = quote_text[:600] + "......"

@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlparse
 from parsehub import ParseHub
 from parsehub.errors import ParseError, UnknownPlatform
 from parsehub.parsers.base import BaseParser
+from parsehub.provider_api.threads import ThreadsPost
 from parsehub.types import ImageParseResult, ImageRef, Platform, VideoParseResult, VideoRef
 from parsehub.utils.utils import match_url, normalize_cookie, run_sync
 
@@ -138,6 +139,28 @@ class TestParserRegistry(unittest.TestCase):
         self.assertIn("图文", by_id["tieba"]["supported_types"])
         self.assertEqual(parsehub.get_platform("https://tieba.baidu.com/p/9939510114"), Platform.TIEBA)
         self.assertIsNone(parsehub.get_platform("https://example.invalid/not-supported"))
+
+
+class TestThreadsProvider(unittest.TestCase):
+    def test_reply_quote_with_image_uses_traditional_chinese_placeholder(self):
+        quote_post = {
+            "caption": {"text": "原文內容"},
+            "code": "quote",
+            "media_type": 1,
+            "image_versions2": {"candidates": [{"url": "https://cdn.example/quote.jpg", "width": 100, "height": 100}]},
+            "user": {"username": "author"},
+        }
+        target_post = {
+            "caption": {"text": "回覆內容"},
+            "code": "target",
+            "media_type": 19,
+            "text_post_app_info": {"linked_inline_media": None},
+        }
+
+        post = ThreadsPost.parse([{"thread_items": [{"post": quote_post}, {"post": target_post}]}], "target")
+
+        self.assertIn("[圖片] 原文內容", post.content)
+        self.assertNotIn("[图片]", post.content)
 
 
 class TestParseHubExceptionBoundary(unittest.IsolatedAsyncioTestCase):
