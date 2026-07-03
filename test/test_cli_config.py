@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,7 +34,8 @@ class TestCliConfig(unittest.TestCase):
         store.set("xhs", "a=b")
 
         self.assertEqual(store.get("xhs"), "a=b")
-        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
     def test_auto_cookie_store_deletes_private_file_cookie(self):
         path = self.base / "cookies.toml"
