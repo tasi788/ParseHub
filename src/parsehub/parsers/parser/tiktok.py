@@ -33,7 +33,7 @@ class TikTokParser(BaseParser):
                 return self._build_image_result(result)
 
     async def _fetch_api_result(self, url: str) -> "TikTokApiResult":
-        crawler = TikTokWebCrawler(proxy=self.proxy, cookie=self.cookie)
+        crawler = TikTokWebCrawler(proxy=self.proxy, cookie=self.cookie.get_value())
         try:
             response = await crawler.parse(url)
             return TikTokApiResult.parse(response)
@@ -63,12 +63,13 @@ class TikTokVideoParseResult(VideoParseResult):
     async def _do_download(
         self,
         *,
-        output_dir: str | Path,
+        output_dir: Path,
         callback: ProgressCallback | None = None,
         callback_args: tuple = (),
         callback_kwargs: dict | None = None,
         proxy: str | None = None,
         headers: dict | None = None,
+        connections: int = 4,
     ) -> "DownloadResult":
         headers = {
             "Referer": "https://www.tiktok.com/",
@@ -80,6 +81,7 @@ class TikTokVideoParseResult(VideoParseResult):
             callback_kwargs=callback_kwargs,
             proxy=proxy,
             headers=headers,
+            connections=connections,
         )
 
 

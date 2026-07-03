@@ -6,7 +6,7 @@ from parsehub.errors import ParseError, UnknownPlatform
 from parsehub.parsers.base import BaseParser
 from parsehub.provider_api.threads import ThreadsPost
 from parsehub.types import ImageParseResult, ImageRef, Platform, VideoParseResult, VideoRef
-from parsehub.utils.utils import match_url, normalize_cookie, run_sync
+from parsehub.utils.helpers import match_url, run_sync
 
 
 class DummyParser(BaseParser):
@@ -62,31 +62,6 @@ class TestCoreUtilities(unittest.TestCase):
         text = "https://example.com/firsthttps://example.org/second"
 
         self.assertEqual(match_url(text), "https://example.com/first")
-
-    def test_normalize_cookie_preserves_none_and_dict_values(self):
-        cookie = {"session": "abc", "flag": ""}
-
-        self.assertIsNone(normalize_cookie(None))
-        self.assertIs(normalize_cookie(cookie), cookie)
-
-    def test_normalize_cookie_parses_cookie_header_strings(self):
-        cookie = normalize_cookie("Cookie: session = abc ; theme= light ; secure")
-
-        self.assertEqual(cookie, {"session": "abc", "theme": "light", "secure": ""})
-
-    def test_normalize_cookie_parses_json_object_strings(self):
-        cookie = normalize_cookie('{"session": " abc ", "empty": null, "number": 123}')
-
-        self.assertEqual(cookie, {"session": "abc", "empty": "", "number": "123"})
-
-    def test_normalize_cookie_returns_none_for_blank_strings(self):
-        self.assertIsNone(normalize_cookie("  \t  "))
-
-    def test_normalize_cookie_rejects_invalid_values(self):
-        with self.assertRaisesRegex(ValueError, "cookie JSON解析失败"):
-            normalize_cookie('{"session": }')
-        with self.assertRaisesRegex(ValueError, "cookie 必须是字符串、字典、JSON 或 None"):
-            normalize_cookie(123)
 
     def test_run_sync_runs_coroutine_without_running_loop(self):
         async def get_value():
@@ -288,11 +263,13 @@ class TestPlatformUrlMatching(unittest.TestCase):
                 "https://www.instagram.com/share/BAexample/",
                 "https://www.instagram.com/user.name/p/C0example/",
                 "https://www.instagram.com/user.name/reel/C0example/",
+                "https://www.instagram.com/reels/DaGI8bPS3ed/",
             ],
             Platform.KUAISHOU: [
                 "https://www.kuaishou.com/short-video/3xexample",
                 "https://v.kuaishou.com/example",
                 "https://www.kuaishou.com/f/example",
+                "https://live.kuaishou.com/u/3xmdumq6gmzrr64/3xjsfb8u3d7gzyu",
             ],
             Platform.PIPIX: [
                 "https://h5.pipix.com/s/example/",
@@ -353,6 +330,10 @@ class TestPlatformUrlMatching(unittest.TestCase):
             Platform.ZUIYOU: [
                 "https://share.xiaochuankeji.cn/hybrid/share/post?pid=393346270",
                 "https://share.xiaochuankeji.cn/hybrid/share/post?pid=393346270&zy_to=applink",
+            ],
+            Platform.SNAPCHAT: [
+                "https://www.snapchat.com/@snapchat/spotlight/W7_EDlXWTBiXAEEniNoMPwAAYbHBpemNsYmlyAZ7mTxgqAZ7mTuxMAAAAAw",
+                "https://www.snapchat.com/@creativemindsho/gBRYnSexSxSBqXdq2Y6bhAAAga2djanpnd3JlAZ8fYED8AZ8fYD7pAAAAAA",
             ],
         }
 

@@ -63,12 +63,13 @@ class CoolapkParseResult(ParseResult):
     async def _do_download(
         self,
         *,
-        output_dir: str | Path,
+        output_dir: Path,
         callback: ProgressCallback | None = None,
         callback_args: tuple = (),
         callback_kwargs: dict | None = None,
         proxy: str | None = None,
         headers: dict | None = None,
+        connections: int = 4,
     ) -> "DownloadResult":
         headers = {
             "Accept": (
@@ -83,6 +84,7 @@ class CoolapkParseResult(ParseResult):
             callback_kwargs=callback_kwargs,
             proxy=proxy,
             headers=headers,
+            connections=connections,
         )
 
 

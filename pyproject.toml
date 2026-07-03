@@ -1,6 +1,6 @@
 [project]
 name = "parsehub"
-version = "2.0.29"
+version = "2.0.40"
 description = "轻量、异步、开箱即用的社交媒体聚合解析库"
 readme = "README.md"
 requires-python = ">=3.12.0"
@@ -27,7 +27,6 @@ dependencies = [
     "urlextract>=1.9.0",
     "yt-dlp[default]",
     "lxml>=5.3.0",
-    "instaloader>=4.14",
     "pydantic>=1.10.19",
     "markdownify>=1.1.0",
     "markdown>=3.7",
@@ -36,7 +35,7 @@ dependencies = [
     "pillow>=12.1.0",
     "python-slugify[unidecode]>=8.0.4",
     "opencv-python-headless>=4.13.0.92",
-    "cryptography>=46.0.6",
+    "cryptography>=49.0.0",
     "gmssl>=3.2.2",
     "stealth-requests>=2.0.4",
 ]

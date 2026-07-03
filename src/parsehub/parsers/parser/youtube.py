@@ -15,18 +15,19 @@ class YtbParse(YtParser):
     @property
     def params(self) -> dict[str, Any]:
         sub: dict[str, Any] = {
+            "format": "mp4+bestvideo[height<=1080]+bestaudio/mp4+bestvideo+bestaudio/mp4+best",
             # "writesubtitles": True, # 下载字幕
             # "writeautomaticsub": True, # 下载自动生成的字幕
             # "subtitlesformat": "ttml", # 字幕格式
             # "subtitleslangs": ["en", "ja", "zh-CN"], # 字幕语言
         }
-        if self.cookie:
-            sub["cookiefile"] = io.StringIO(self.to_netscape_cookie(self.cookie, "youtube.com"))
+        if cookie := self.cookie.get_value():
+            sub["cookiefile"] = io.StringIO(self.to_netscape_cookie(cookie, "youtube.com"))
         p = sub | super().params
         return p
 
     @staticmethod
-    def to_netscape_cookie(cookie: dict, domain: str) -> str | None:
+    def to_netscape_cookie(cookie: dict | None, domain: str) -> str | None:
         """将字典格式 cookie 转为 Netscape 格式字符串
         :param cookie: 字典格式 cookie
         :param domain: cookie 所属域名, 例如 "youtube.com"

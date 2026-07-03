@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
@@ -20,7 +20,6 @@ from ...types import (
     VideoParseResult,
     VideoRef,
 )
-from ...utils.utils import cookie_ellipsis
 from ..base.ytdlp import YtParser, YtVideoParseResult
 
 
@@ -88,10 +87,10 @@ class BiliParse(YtParser):
     async def get_dynamic_info(self, url: str) -> BiliDynamic:
         async with BiliAPI(proxy=self.proxy) as bili:
             try:
-                dynamic_info = await bili.get_dynamic_info(url, cookie=self.cookie)
+                dynamic_info = await bili.get_dynamic_info(url, cookie=self.cookie.get_value())
             except Exception as e:
                 if "风控" in str(e):
-                    raise ParseError(f"账号风控\n使用的cookie: {cookie_ellipsis(self.cookie)}") from e
+                    raise ParseError(f"账号风控\n使用的cookie: {self.cookie}") from e
                 raise ParseError(str(e)) from e
         return cast(BiliDynamic, dynamic_info)
 
@@ -163,17 +162,26 @@ class BiliParse(YtParser):
             desc = desc.replace(hashtag, f" {hashtag.strip().removesuffix('#')} ")
         return desc.strip()
 
+    @property
+    def params(self) -> dict[str, Any]:
+        sub: dict[str, Any] = {
+            "format": "mp4+bestvideo[height<=1080]+bestaudio/mp4+bestvideo+bestaudio/mp4+best",
+        }
+        p = sub | super().params
+        return p
+
 
 class BiliVideoParseResult(VideoParseResult):
     async def _do_download(
         self,
         *,
-        output_dir: str | Path,
+        output_dir: Path,
         callback: ProgressCallback | None = None,
         callback_args: tuple = (),
         callback_kwargs: dict | None = None,
         proxy: str | None = None,
         headers: dict | None = None,
+        connections: int = 4,
     ) -> DownloadResult:
         headers = {"referer": "https://www.bilibili.com", "User-Agent": GlobalConfig.ua}
         return await super()._do_download(
@@ -183,6 +191,7 @@ class BiliVideoParseResult(VideoParseResult):
             callback_kwargs=callback_kwargs,
             proxy=proxy,
             headers=headers,
+            connections=connections,
         )
 
 

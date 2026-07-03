@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from loguru import logger
 from yt_dlp import YoutubeDL
 
 from ...types import (
@@ -32,6 +33,7 @@ def switch_ytdlp_proxy(ydl: YoutubeDL, proxy: str | None) -> None:
         director.close()
 
 
+@logger.catch
 def download_video(yto_params: dict[str, Any], url: str, proxy: str | None = None) -> None:
     """在独立线程中下载视频"""
     try:
@@ -155,7 +157,6 @@ class YtParser(BaseParser, register=False):
     @property
     def params(self) -> dict[str, Any]:
         params = {
-            "format": "mp4+bestvideo[height<=1080]+bestaudio",
             "quiet": True,  # 不输出日志
             "noprogress": True,  # 不输出下载进度
             # "writethumbnail": True, # 下载缩略图
@@ -185,12 +186,13 @@ class YtVideoParseResult(VideoParseResult):
     async def _do_download(
         self,
         *,
-        output_dir: str | Path,
+        output_dir: Path,
         callback: ProgressCallback | None = None,
         callback_args: tuple = (),
         callback_kwargs: dict | None = None,
         proxy: str | None = None,
         headers: dict | None = None,
+        connections: int = 4,
     ) -> "DownloadResult":
         if callback_kwargs is None:
             callback_kwargs = {}
@@ -200,7 +202,8 @@ class YtVideoParseResult(VideoParseResult):
         if self.dl.proxy:
             paramss["proxy"] = self.dl.proxy
 
-        paramss["outtmpl"] = f"{output_dir_path.joinpath('ytdlp_%(id)s')}.%(ext)s"
+        paramss["outtmpl"] = f"{output_dir_path.joinpath(self.name)}.%(ext)s"
+        paramss["concurrent_fragment_downloads"] = connections  # 多线程下载
 
         if callback:
             loop = asyncio.get_running_loop()

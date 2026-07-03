@@ -15,7 +15,7 @@ from slugify import slugify
 from ..config import GlobalConfig
 from ..errors import DeleteError, DownloadError
 from ..utils.downloader import download
-from ..utils.utils import run_sync
+from ..utils.helpers import run_sync
 from .callback import ProgressCallback
 from .media_file import AniFile, AnyMediaFile, ImageFile, LivePhotoFile, VideoFile
 from .media_ref import AniRef, AnyMediaRef, ImageRef, LivePhotoRef, VideoRef
@@ -41,11 +41,15 @@ class ParseResult(ABC):  # noqa: B024
         :param content: 正文 (纯文本)
         :param platform: 平台
         """
-        self.raw_url: str | None = None
+        self.raw_url: str = ""
         self.title = (title or "").strip()
         self.content = (content or "").strip()
         self.media = media
         self.platform = platform
+        self.name = slugify(
+            self.title or self.content, allow_unicode=True, max_length=50, lowercase=False
+        ).strip() or str(time.time_ns())
+        """符合路径命名规范的名称, 可用于目录和文件名"""
 
     def __repr__(self) -> str:
         media_count = (
@@ -77,12 +81,13 @@ class ParseResult(ABC):  # noqa: B024
     async def _do_download(
         self,
         *,
-        output_dir: str | Path,
+        output_dir: Path,
         callback: ProgressCallback | None = None,
         callback_args: tuple = (),
         callback_kwargs: dict | None = None,
         proxy: str | None = None,
         headers: dict | None = None,
+        connections: int = 4,
     ) -> "DownloadResult":
         """
         执行下载
@@ -92,6 +97,7 @@ class ParseResult(ABC):  # noqa: B024
         :param callback_kwargs: 回调函数的关键字参数
         :param proxy: 代理
         :param headers: 请求头
+        :param connections: 多线程下载连接数, 默认为 4
         :return: DownloadResult
         """
         if self.media is None:
@@ -114,15 +120,23 @@ class ParseResult(ABC):  # noqa: B024
                 dl_progress_args = callback_args
                 dl_progress_kwargs = callback_kwargs or {}
 
+            index = i + 1
+
             try:
+                save_path = (
+                    output_dir.joinpath(f"{self.name}.{media.ext}")
+                    if is_single
+                    else output_dir.joinpath(f"{index:03d}_{self.name}.{media.ext}")
+                )
                 f = await download(
                     media.url,
-                    f"{output_dir}/{i}.{media.ext}",
+                    save_path,
                     headers=headers,
                     proxy=proxy,
                     progress=dl_progress,
                     progress_args=dl_progress_args,
                     progress_kwargs=dl_progress_kwargs,
+                    connections=connections,
                 )
             except Exception as e:
                 shutil.rmtree(output_dir, ignore_errors=True)
@@ -140,11 +154,17 @@ class ParseResult(ABC):  # noqa: B024
                     mf = LivePhotoFile(path=f, width=media.width, height=media.height, duration=media.duration)
                     if media.video_url:
                         try:
+                            save_path = (
+                                output_dir.joinpath(f"{self.name}_video.{media.video_ext}")
+                                if is_single
+                                else output_dir.joinpath(f"{index:03d}_{self.name}_video.{media.video_ext}")
+                            )
                             vf = await download(
                                 media.video_url,
-                                f"{output_dir}/{i}_video.{media.video_ext}",
+                                save_path,
                                 headers=headers,
                                 proxy=proxy,
+                                connections=connections,
                             )
                         except Exception as e:
                             shutil.rmtree(output_dir, ignore_errors=True)
@@ -174,6 +194,7 @@ class ParseResult(ABC):  # noqa: B024
         callback_kwargs: dict | None = None,
         proxy: str | None = None,
         save_metadata: bool = False,
+        connections: int = 4,
     ) -> "DownloadResult":
         """
         :param path: 保存路径
@@ -182,6 +203,7 @@ class ParseResult(ABC):  # noqa: B024
         :param callback_kwargs: 回调函数的关键字参数
         :param proxy: 代理
         :param save_metadata: 保存解析结果为 metadata.json, 默认为 False
+        :param connections: 多线程下载连接数, 默认为 4
         :return: DownloadResult
 
         Note:
@@ -196,13 +218,10 @@ class ParseResult(ABC):  # noqa: B024
                 - ``count``: 计数进度，用于多文件下载时报告已完成/总文件数
         """
         save_dir = Path(path) if path else GlobalConfig.default_save_dir
-        r = slugify(
-            self.title or self.content or str(time.time_ns()), allow_unicode=True, max_length=20, lowercase=False
-        )
-        output_dir = save_dir.joinpath(r)
+        output_dir = save_dir.joinpath(self.name)
         counter = 2
         while output_dir.exists():
-            output_dir = save_dir.joinpath(f"{r}_{counter}")
+            output_dir = save_dir.joinpath(f"{self.name}_{counter}")
             counter += 1
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -217,6 +236,7 @@ class ParseResult(ABC):  # noqa: B024
                 callback_args=callback_args,
                 callback_kwargs=callback_kwargs,
                 proxy=proxy,
+                connections=connections,
             )
         except Exception as e:
             shutil.rmtree(output_dir, ignore_errors=True)
@@ -231,6 +251,7 @@ class ParseResult(ABC):  # noqa: B024
         callback_kwargs: dict | None = None,
         proxy: str | None = None,
         save_metadata: bool = False,
+        connections: int = 4,
     ) -> "DownloadResult":
         """
         :param path: 保存路径
@@ -239,6 +260,7 @@ class ParseResult(ABC):  # noqa: B024
         :param callback_kwargs: 回调函数的关键字参数
         :param proxy: 代理
         :param save_metadata: 保存解析结果为 metadata.json, 默认为 False
+        :param connections: 多线程下载连接数, 默认为 4
         :return: DownloadResult
 
         Note:
@@ -260,6 +282,7 @@ class ParseResult(ABC):  # noqa: B024
                 callback_kwargs=callback_kwargs,
                 proxy=proxy,
                 save_metadata=save_metadata,
+                connections=connections,
             )
         )
 

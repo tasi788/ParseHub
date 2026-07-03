@@ -38,10 +38,10 @@ class DouyinParser(BaseParser):
 
     async def _fetch_api_result(self, url: str) -> "DouyinApiResult":
         """获取并解析抖音 API 结果"""
-        if not self.cookie:
+        if not (cookie := self.cookie.get_value()):
             raise ParseError("抖音 Cookie 未配置")
 
-        crawler = DouyinWebCrawler(proxy=self.proxy, cookie=self.cookie)
+        crawler = DouyinWebCrawler(proxy=self.proxy, cookie=cookie)
         response = await crawler.parse(url)
         return DouyinApiResult.parse(response)
 
@@ -68,12 +68,13 @@ class DouyinParseResult(ParseResult):
     async def _do_download(
         self,
         *,
-        output_dir: str | Path,
+        output_dir: Path,
         callback: ProgressCallback | None = None,
         callback_args: tuple = (),
         callback_kwargs: dict | None = None,
         proxy: str | None = None,
         headers: dict | None = None,
+        connections: int = 4,
     ) -> "DownloadResult":
         headers = {
             "Referer": "https://www.douyin.com/",
@@ -85,6 +86,7 @@ class DouyinParseResult(ParseResult):
             callback_kwargs=callback_kwargs,
             proxy=proxy,
             headers=headers,
+            connections=connections,
         )
 
 
