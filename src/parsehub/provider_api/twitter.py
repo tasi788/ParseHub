@@ -14,6 +14,8 @@ from ..types import ParseError
 
 
 class Twitter:
+    fallback_api_url = "https://api.fxtwitter.com/status/{tweet_id}"
+
     def __init__(self, proxy: str | None = None, cookie: dict | None = None):
         self.proxy = proxy
         self.authorization = (
@@ -70,8 +72,73 @@ class Twitter:
                 headers=headers,
                 cookies=cookie,
             )
-        response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPError as graphql_error:
+                try:
+                    return await self._fetch_fallback(client, tweet_id)
+                except Exception as fallback_error:
+                    raise ParseError(f"Twitter fallback failed: {fallback_error}") from graphql_error
         return self.parse(response.json())
+
+    async def _fetch_fallback(self, client: httpx.AsyncClient, tweet_id: str) -> TwitterTweet:
+        response = await client.get(
+            self.fallback_api_url.format(tweet_id=tweet_id),
+            headers={
+                "accept": "application/json",
+                "user-agent": GlobalConfig.ua,
+            },
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        tweet = payload.get("tweet")
+        if not isinstance(tweet, dict):
+            raise ParseError("Twitter fallback returned no tweet")
+        return self.parse_fallback(tweet, tweet_id)
+
+    @staticmethod
+    def parse_fallback(tweet: dict, tweet_id: str) -> TwitterTweet:
+        media: list[TwitterVideo | TwitterPhoto | TwitterAni] = []
+        media_data = tweet.get("media") or {}
+        items = media_data.get("all") if isinstance(media_data, dict) else None
+
+        for item in items or []:
+            if not isinstance(item, dict) or not (url := item.get("url")):
+                continue
+
+            width = int(item.get("width") or 0)
+            height = int(item.get("height") or 0)
+            media_type = item.get("type")
+            if media_type == "photo":
+                media.append(TwitterPhoto(url=url, width=width, height=height))
+            elif media_type == "video":
+                duration_millis = int(float(item.get("duration") or 0) * 1000)
+                media.append(
+                    TwitterVideo(
+                        url=url,
+                        width=width,
+                        height=height,
+                        duration_millis=duration_millis,
+                        thumb_url=item.get("thumbnail_url"),
+                    )
+                )
+            elif media_type in {"gif", "animated_gif"}:
+                media.append(
+                    TwitterAni(
+                        url=url,
+                        width=width,
+                        height=height,
+                        thumb_url=item.get("thumbnail_url"),
+                    )
+                )
+
+        full_text = tweet.get("text") or tweet.get("raw_text") or ""
+        return TwitterTweet(
+            tweet_id=str(tweet.get("id") or tweet_id),
+            full_text=full_text,
+            media=media or None,
+        )
 
     def parse(self, result: dict) -> TwitterTweet:
         if e := result.get("errors"):

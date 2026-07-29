@@ -2,10 +2,13 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import parse_qs, urlparse
 
+import httpx
+
 from parsehub import ParseHub
 from parsehub.errors import ParseError, UnknownPlatform
 from parsehub.parsers.base import BaseParser
 from parsehub.provider_api.threads import ThreadsAPI, ThreadsPost
+from parsehub.provider_api.twitter import Twitter, TwitterAni, TwitterPhoto, TwitterVideo
 from parsehub.types import ImageParseResult, ImageRef, Platform, VideoParseResult, VideoRef
 from parsehub.utils.helpers import match_url, run_sync
 
@@ -170,8 +173,7 @@ class TestThreadsShareUrl(unittest.IsolatedAsyncioTestCase):
     async def test_provider_allows_slow_threads_route_response(self):
         response = Mock()
         response.text = (
-            'for (;;);{"__type":"first_response","payload":'
-            '{"result":{"exports":{"meta":{"title":"Threads post"}}}}}'
+            'for (;;);{"__type":"first_response","payload":{"result":{"exports":{"meta":{"title":"Threads post"}}}}}'
         )
         client = AsyncMock()
         client.__aenter__.return_value = client
@@ -182,6 +184,108 @@ class TestThreadsShareUrl(unittest.IsolatedAsyncioTestCase):
 
         client_type.assert_called_once_with(proxy=None, timeout=30)
         self.assertEqual(post.content, "Threads post")
+
+
+class TestTwitterProvider(unittest.IsolatedAsyncioTestCase):
+    async def test_graphql_403_falls_back_to_fxtwitter_photo(self):
+        tweet_id = "2082388785430659288"
+        tweet_url = f"https://x.com/livedoornews/status/{tweet_id}"
+        graphql_response = httpx.Response(
+            403,
+            request=httpx.Request("GET", "https://api.twitter.com/graphql/test"),
+        )
+        fallback_response = httpx.Response(
+            200,
+            json={
+                "tweet": {
+                    "id": tweet_id,
+                    "text": "fallback content",
+                    "media": {
+                        "all": [
+                            {
+                                "type": "photo",
+                                "url": "https://pbs.twimg.com/media/example.jpg",
+                                "width": 640,
+                                "height": 617,
+                            }
+                        ]
+                    },
+                }
+            },
+            request=httpx.Request("GET", f"https://api.fxtwitter.com/status/{tweet_id}"),
+        )
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.get.side_effect = [graphql_response, fallback_response]
+
+        with patch("parsehub.provider_api.twitter.httpx.AsyncClient", return_value=client):
+            tweet = await Twitter().fetch_tweet(tweet_url)
+
+        self.assertEqual(tweet.tweet_id, tweet_id)
+        self.assertEqual(tweet.full_text, "fallback content")
+        self.assertEqual(
+            tweet.media,
+            [
+                TwitterPhoto(
+                    url="https://pbs.twimg.com/media/example.jpg",
+                    width=640,
+                    height=617,
+                )
+            ],
+        )
+        self.assertEqual(client.get.await_count, 2)
+        fallback_call = client.get.await_args_list[1]
+        self.assertEqual(fallback_call.args[0], f"https://api.fxtwitter.com/status/{tweet_id}")
+        self.assertIn("user-agent", fallback_call.kwargs["headers"])
+
+    def test_fxtwitter_payload_maps_video_and_animation(self):
+        tweet = Twitter.parse_fallback(
+            {
+                "id": "123",
+                "raw_text": "fallback media",
+                "media": {
+                    "all": [
+                        {
+                            "type": "video",
+                            "url": "https://video.twimg.com/video.mp4",
+                            "thumbnail_url": "https://pbs.twimg.com/video-thumb.jpg",
+                            "width": 1280,
+                            "height": 720,
+                            "duration": 12.5,
+                        },
+                        {
+                            "type": "gif",
+                            "url": "https://video.twimg.com/animation.mp4",
+                            "thumbnail_url": "https://pbs.twimg.com/animation-thumb.jpg",
+                            "width": 640,
+                            "height": 360,
+                        },
+                    ]
+                },
+            },
+            "fallback-id",
+        )
+
+        self.assertEqual(tweet.tweet_id, "123")
+        self.assertEqual(tweet.full_text, "fallback media")
+        self.assertEqual(
+            tweet.media,
+            [
+                TwitterVideo(
+                    url="https://video.twimg.com/video.mp4",
+                    width=1280,
+                    height=720,
+                    duration_millis=12500,
+                    thumb_url="https://pbs.twimg.com/video-thumb.jpg",
+                ),
+                TwitterAni(
+                    url="https://video.twimg.com/animation.mp4",
+                    width=640,
+                    height=360,
+                    thumb_url="https://pbs.twimg.com/animation-thumb.jpg",
+                ),
+            ],
+        )
 
 
 class TestParseHubExceptionBoundary(unittest.IsolatedAsyncioTestCase):
