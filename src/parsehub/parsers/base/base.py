@@ -30,6 +30,8 @@ class BaseParser(ABC):
     """解析完成后需要清理的参数, 在解析完成前会保留这些参数, 优先级高于 __reserved_parameters__"""
     __redirect_keywords__: list[str] = []
     """如果链接包含其中之一, 则遵循重定向规则"""
+    __redirect_user_agent__: str = GlobalConfig.ua
+    """重定向请求使用的 User-Agent"""
 
     def __init__(self, *, proxy: str | None = None, cookie: SecretCookie = SecretCookie()):
         self.proxy = proxy
@@ -116,7 +118,7 @@ class BaseParser(ABC):
                     r = await client.get(
                         url,
                         follow_redirects=True,
-                        headers={"User-Agent": GlobalConfig.ua},
+                        headers={"User-Agent": self.__redirect_user_agent__},
                     )
                 except (httpx.ReadTimeout, httpx.ConnectTimeout) as e:
                     raise ParseError("获取原始链接超时") from e

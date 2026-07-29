@@ -1,10 +1,11 @@
 import unittest
+from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from parsehub import ParseHub
 from parsehub.errors import ParseError, UnknownPlatform
 from parsehub.parsers.base import BaseParser
-from parsehub.provider_api.threads import ThreadsPost
+from parsehub.provider_api.threads import ThreadsAPI, ThreadsPost
 from parsehub.types import ImageParseResult, ImageRef, Platform, VideoParseResult, VideoRef
 from parsehub.utils.helpers import match_url, run_sync
 
@@ -136,6 +137,51 @@ class TestThreadsProvider(unittest.TestCase):
 
         self.assertIn("[圖片] 原文內容", post.content)
         self.assertNotIn("[图片]", post.content)
+
+
+class TestThreadsShareUrl(unittest.IsolatedAsyncioTestCase):
+    async def test_share_url_resolves_to_canonical_post_url(self):
+        share_url = "https://www.threads.com/share/_xwK6xuT6/"
+        canonical_url = "https://www.threads.com/@owaszirx8295dk/post/DbV2uRZj6FK"
+        redirect_response = Mock()
+        redirect_response.url = f"{canonical_url}?xmt=tracking&slof=1"
+        redirect_client = AsyncMock()
+        redirect_client.__aenter__.return_value = redirect_client
+        redirect_client.get.return_value = redirect_response
+
+        with (
+            patch("parsehub.parsers.base.base.httpx.AsyncClient", return_value=redirect_client),
+            patch(
+                "parsehub.parsers.parser.threads.ThreadsAPI.parse",
+                new=AsyncMock(return_value=ThreadsPost(content="Threads post", media=[])),
+            ) as parse_post,
+        ):
+            result = await ParseHub().parse(share_url)
+
+        redirect_client.get.assert_awaited_once_with(
+            share_url,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        parse_post.assert_awaited_once_with(canonical_url)
+        self.assertEqual(result.platform, Platform.THREADS)
+        self.assertEqual(result.raw_url, canonical_url)
+
+    async def test_provider_allows_slow_threads_route_response(self):
+        response = Mock()
+        response.text = (
+            'for (;;);{"__type":"first_response","payload":'
+            '{"result":{"exports":{"meta":{"title":"Threads post"}}}}}'
+        )
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.post.return_value = response
+
+        with patch("parsehub.provider_api.threads.httpx.AsyncClient", return_value=client) as client_type:
+            post = await ThreadsAPI().parse("https://www.threads.com/@user/post/DbV2uRZj6FK")
+
+        client_type.assert_called_once_with(proxy=None, timeout=30)
+        self.assertEqual(post.content, "Threads post")
 
 
 class TestParseHubExceptionBoundary(unittest.IsolatedAsyncioTestCase):
@@ -282,6 +328,7 @@ class TestPlatformUrlMatching(unittest.TestCase):
                 "https://www.threads.com/@zaborona.magazine/post/DBuqMBwMfxW",
                 "https://www.threads.com/@user_name/post/DBuqMBwMfxW",
                 "https://www.threads.com/user_name/post/DBuqMBwMfxW",
+                "https://www.threads.com/share/_xwK6xuT6/",
             ],
             Platform.TIEBA: [
                 "https://tieba.baidu.com/p/9939510114",
