@@ -36,7 +36,7 @@ class ThreadsAPI:
             "lsd": lsd,
         }
 
-        async with httpx.AsyncClient(proxy=self.proxy) as client:
+        async with httpx.AsyncClient(proxy=self.proxy, timeout=30) as client:
             response = await client.post("https://www.threads.com/ajax/route-definition", headers=headers, data=data)
             response.raise_for_status()
             jsonp = [json.loads(j.strip()) for j in response.text.strip().split("for (;;);") if j]
