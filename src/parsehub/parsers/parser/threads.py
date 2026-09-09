@@ -6,7 +6,7 @@ from ..base.base import BaseParser
 class ThreadsParser(BaseParser):
     __platform__ = Platform.THREADS
     __supported_type__ = ["视频", "图文"]
-    __match__ = r"^(https?://)?(?:[\w-]+\.)?threads\.com/(?:@?[\w.]+/post/[\w-]+|share/[\w-]+)(?:[/?#].*)?$"
+    __match__ = r"^(https?://)?(?:[\w-]+\.)?threads\.com/(?:@?[\w.]+/(?:post|video)/[\w-]+|share/[\w-]+)(?:[/?#].*)?$"
     __redirect_keywords__ = ["/share/"]
     __redirect_user_agent__ = "Mozilla/5.0"
 

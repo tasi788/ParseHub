@@ -44,14 +44,14 @@ class ThreadsAPI:
 
     @staticmethod
     def get_username_by_url(url: str) -> str:
-        u = re.search(r"/(?:@)?([\w.]+)/post/", url)
+        u = re.search(r"/(?:@)?([\w.]+)/(?:post|video)/", url)
         if not u:
             raise ValueError("从 URL 中获取用户名失败")
         return u[1]
 
     @staticmethod
     def get_post_id_by_url(url: str) -> str:
-        p = re.search(r"/post/([\w-]+)", url)
+        p = re.search(r"/(?:post|video)/([\w-]+)", url)
         if not p:
             raise ValueError("从 URL 中获取帖子 ID 失败")
         return p[1]
