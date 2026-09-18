@@ -140,9 +140,20 @@ class ThreadsPost:
             if target_post:
                 break
 
+        if not target_post:
+            for entry in jsonp:
+                if "BarcelonaPostPageTargetQueryRelayPreloader" not in (entry.get("id") or ""):
+                    continue
+                result = (entry.get("result") or {}).get("result") or {}
+                post = (result.get("data") or {}).get("media")
+                if isinstance(post, dict) and post.get("code") == target_id:
+                    target_post = post
+                    break
+
         if target_post and not quote_post:
-            share_info = target_post.get("text_post_app_info", {}).get("share_info", {})
-            quote_post = share_info.get("quoted_post")
+            app_info = target_post.get("text_post_app_info") or {}
+            share_info = app_info.get("share_info") or {}
+            quote_post = share_info.get("quoted_attachment_post") or share_info.get("quoted_post")
 
         return target_post, quote_post
 
@@ -168,7 +179,7 @@ class ThreadsPost:
 
         def fn(d: dict) -> ThreadsMedia | list[ThreadsMedia]:
             media: ThreadsMedia | list[ThreadsMedia]
-            match d["media_type"]:
+            match d.get("media_type"):
                 case 1:  # 单张图片
                     image = d["image_versions2"]["candidates"][0]
                     media = ThreadsMedia(
@@ -216,10 +227,14 @@ class ThreadsPost:
                                 )
                             )
                 case 19:  # 纯文本/外部链接
-                    if linked_inline_media := d["text_post_app_info"]["linked_inline_media"]:
-                        media = fn(linked_inline_media)
-                    else:
-                        media = []
+                    app_info = d.get("text_post_app_info") or {}
+                    share_info = app_info.get("share_info") or {}
+                    attachment = (
+                        app_info.get("linked_inline_media")
+                        or share_info.get("quoted_attachment_post")
+                        or share_info.get("quoted_post")
+                    )
+                    media = fn(attachment) if attachment else []
                 case _:
                     media = []
             return media
